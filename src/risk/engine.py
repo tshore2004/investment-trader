@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from src.broker.order import Order
 from src.risk.checks import DrawdownCheck, PositionLimitCheck, RiskCheck
@@ -9,9 +9,11 @@ log = get_logger(__name__)
 
 class RiskEngine:
     def __init__(self, peak_nav: float = 0.0) -> None:
+        # DrawdownCheck runs first: it is a portfolio-level kill-switch that must
+        # take priority over per-symbol position limits.
         self._checks: list[RiskCheck] = [
-            PositionLimitCheck(),
             DrawdownCheck(peak_nav),
+            PositionLimitCheck(),
         ]
         self._portfolio: dict[str, float] = {}
 

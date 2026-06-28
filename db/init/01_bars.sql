@@ -1,3 +1,5 @@
+CREATE EXTENSION IF NOT EXISTS timescaledb CASCADE;
+
 CREATE TABLE IF NOT EXISTS bars (
     symbol      TEXT        NOT NULL,
     timestamp   TIMESTAMPTZ NOT NULL,
@@ -9,4 +11,4 @@ CREATE TABLE IF NOT EXISTS bars (
     PRIMARY KEY (symbol, timestamp)
 );
 
-SELECT create_hypertable('bars', 'timestamp', if_not_exists => TRUE);
+SELECT create_hypertable('bars', 'timestamp'::name, if_not_exists => TRUE);

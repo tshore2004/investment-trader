@@ -1,44 +1,57 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Any
 
-import ib_insync as ibi
+if TYPE_CHECKING:
+    import ib_insync as ibi
 
-from src.broker.order import Order, OrderSide, OrderStatus, OrderType
+from src.broker.order import Order, OrderStatus, OrderType
 from src.utils import get_logger, get_settings
 
 log = get_logger(__name__)
 
 
 class IBBroker:
-    def __init__(self) -> None:
+    def __init__(self, ib: ibi.IB | None = None) -> None:
         self._settings = get_settings()
-        self._ib = ibi.IB()
+        self._owns_ib = ib is None
+        if ib is not None:
+            self._ib: Any = ib
+        else:
+            import ib_insync as _ibi  # lazy: eventkit fails at module level on Py 3.14+
+            self._ib = _ibi.IB()  # type: ignore[no-untyped-call]
 
     async def connect(self) -> None:
+        if not self._owns_ib:
+            return
         await self._ib.connectAsync(
             host=self._settings.ib_host,
             port=self._settings.ib_port,
-            clientId=self._settings.ib_client_id + 10,  # separate client ID from feed
+            clientId=self._settings.ib_client_id + 10,
         )
         log.info("broker_connected")
 
     async def disconnect(self) -> None:
+        if not self._owns_ib:
+            return
         self._ib.disconnect()
 
     async def submit(self, order: Order) -> Order:
-        contract = ibi.Stock(order.symbol, "SMART", "USD")
+        import ib_insync as _ibi  # lazy: eventkit fails at module level on Py 3.14+
+        contract = _ibi.Stock(order.symbol, "SMART", "USD")
 
+        ib_order: Any
         if order.order_type == OrderType.MARKET:
-            ib_order = ibi.MarketOrder(order.side.value, order.quantity)
+            ib_order = _ibi.MarketOrder(order.side.value, order.quantity)
         elif order.order_type == OrderType.LIMIT:
             assert order.limit_price is not None
-            ib_order = ibi.LimitOrder(order.side.value, order.quantity, order.limit_price)
+            ib_order = _ibi.LimitOrder(order.side.value, order.quantity, order.limit_price)
         else:
             raise ValueError(f"Unsupported order type: {order.order_type}")
 
         self._ib.placeOrder(contract, ib_order)
-        order.submitted_at = datetime.now(timezone.utc)
+        order.submitted_at = datetime.now(UTC)
         order.status = OrderStatus.SUBMITTED
 
         log.info(
@@ -55,4 +68,4 @@ class IBBroker:
 
     @property
     def is_connected(self) -> bool:
-        return self._ib.isConnected()
+        return bool(self._ib.isConnected())
