@@ -15,7 +15,7 @@ import ib_insync as ibi  # noqa: E402
 import uvicorn  # noqa: E402
 
 from src.broker.ib_broker import IBBroker  # noqa: E402
-from src.dashboard.app import create_app, get_state  # noqa: E402
+from src.dashboard.app import create_app, get_state, set_feed  # noqa: E402
 from src.data_ingestion.feed import Bar, MarketDataFeed  # noqa: E402
 from src.data_ingestion.store import TimeseriesStore  # noqa: E402
 from src.risk.engine import RiskEngine  # noqa: E402
@@ -79,7 +79,7 @@ async def main() -> None:
     feed.on_bar(registry.dispatch)
     feed.on_bar(_bar_to_dashboard)
 
-    # Subscribe to symbols
+    set_feed(feed)\n\n    # Subscribe to symbols
     for symbol in SYMBOLS:
         feed.subscribe(symbol)
 

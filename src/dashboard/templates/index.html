@@ -37,6 +37,13 @@
   #symbol-tabs { display: flex; gap: 1px; background: #21262d; }
   .sym-tab { padding: 8px 14px; cursor: pointer; font-size: 12px; font-weight: 600; color: #8b949e; background: #0d1117; border: none; }
   .sym-tab.active { color: #e6edf3; border-bottom: 2px solid #58a6ff; }
+
+  #search-bar { display:flex; gap:8px; align-items:center; margin-left:auto; }
+  #sym-input { background:#21262d; border:1px solid #30363d; color:#e6edf3; padding:5px 10px; border-radius:6px; font-family:inherit; font-size:13px; width:110px; outline:none; }
+  #sym-input:focus { border-color:#58a6ff; }
+  #sym-btn { background:#1f6feb; color:#fff; border:none; padding:5px 12px; border-radius:6px; cursor:pointer; font-size:13px; font-family:inherit; }
+  #sym-btn:hover { background:#388bfd; }
+  #search-status { font-size:11px; color:#8b949e; }
   #no-data { color: #8b949e; padding: 20px; text-align: center; font-size: 12px; }
 </style>
 </head>
@@ -45,6 +52,11 @@
   <h1>&#9650; Hedge Quant</h1>
   <span id="conn-badge" class="badge disconnected">CONNECTING</span>
   <span id="last-ts" style="color:#8b949e;font-size:11px;margin-left:auto"></span>
+  <div id="search-bar">
+    <input id="sym-input" placeholder="e.g. TSLA" maxlength="8" />
+    <button id="sym-btn">Subscribe</button>
+    <span id="search-status"></span>
+  </div>
 </header>
 
 <div class="grid">
@@ -238,6 +250,25 @@ function connect() {
 
 window.addEventListener('resize', () => {
   chart.applyOptions({ width: chartEl.offsetWidth, height: chartEl.offsetHeight });
+});
+
+
+document.getElementById('sym-btn').onclick = async () => {
+  const sym = document.getElementById('sym-input').value.toUpperCase().trim();
+  const status = document.getElementById('search-status');
+  if (!sym) return;
+  status.textContent = 'subscribing...';
+  try {
+    const r = await fetch('/api/subscribe/' + sym, { method: 'POST' });
+    const j = await r.json();
+    if (j.status === 'subscribed') { status.textContent = sym + ' subscribed'; switchSymbol(sym); }
+    else if (j.status === 'already_subscribed') { status.textContent = sym + ' already active'; switchSymbol(sym); }
+    else { status.textContent = j.detail || 'error'; }
+  } catch(e) { status.textContent = 'request failed'; }
+  setTimeout(() => document.getElementById('search-status').textContent = '', 3000);
+};
+document.getElementById('sym-input').addEventListener('keydown', e => {
+  if (e.key === 'Enter') document.getElementById('sym-btn').click();
 });
 
 connect();
