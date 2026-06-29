@@ -55,18 +55,33 @@ class MarketDataFeed:
 
     def subscribe(self, symbol: str) -> None:
         contract = ibi.Stock(symbol, "SMART", "USD")
-        bars_list: Any = self._ib.reqRealTimeBars(
-            contract, barSize=5, whatToShow="TRADES", useRTH=False
+        # reqHistoricalData with keepUpToDate=True streams live bars via the
+        # historical data channel — no per-symbol market data subscription needed
+        # (unlike reqRealTimeBars which requires an exchange subscription).
+        bars_list: Any = self._ib.reqHistoricalData(
+            contract,
+            endDateTime="",
+            durationStr="1 D",
+            barSizeSetting="5 secs",
+            whatToShow="TRADES",
+            useRTH=False,
+            keepUpToDate=True,
         )
 
         def _on_update(bars: Any, hasNewBar: bool) -> None:
             if not hasNewBar or not bars:
                 return
             raw = bars[-1]
+            # Historical bar .date is a datetime (naive UTC); make it timezone-aware.
+            raw_date: Any = raw.date
+            if isinstance(raw_date, datetime):
+                ts = raw_date if raw_date.tzinfo is not None else raw_date.replace(tzinfo=timezone.utc)
+            else:
+                ts = datetime.fromtimestamp(float(raw_date), tz=timezone.utc)
             bar = Bar(
                 symbol=symbol,
-                timestamp=datetime.fromtimestamp(raw.time, tz=timezone.utc),
-                open=float(raw.open_),
+                timestamp=ts,
+                open=float(raw.open),
                 high=float(raw.high),
                 low=float(raw.low),
                 close=float(raw.close),
