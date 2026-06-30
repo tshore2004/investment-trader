@@ -1,100 +1,151 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
+
+import pandas as pd
+import pytest
 
 from src.data_ingestion.feed import Bar, MarketDataFeed
 
 
-def _make_bar(symbol: str = "AAPL") -> Bar:
-    return Bar(
-        symbol=symbol,
-        timestamp=datetime(2024, 1, 1, 10, 0, tzinfo=UTC),
-        open=150.0, high=151.0, low=149.0, close=150.5, volume=1000,
+def _make_history(closes: list[float], base_ts: datetime | None = None) -> pd.DataFrame:
+    """Return a DataFrame that mimics yfinance Ticker.history() output."""
+    base = base_ts or datetime(2024, 6, 30, 14, 0, tzinfo=UTC)
+    index = pd.DatetimeIndex(
+        [pd.Timestamp(base) + pd.Timedelta(minutes=i) for i in range(len(closes))],
+        tz="UTC",
+    )
+    return pd.DataFrame(
+        {
+            "Open": closes,
+            "High": [c + 0.5 for c in closes],
+            "Low": [c - 0.5 for c in closes],
+            "Close": closes,
+            "Volume": [1000] * len(closes),
+        },
+        index=index,
     )
 
 
 class TestMarketDataFeed:
     def test_on_bar_registers_callback(self) -> None:
-        mock_ib = MagicMock()
-        feed = MarketDataFeed(ib=mock_ib)
+        feed = MarketDataFeed(ib=MagicMock())
         cb = MagicMock()
         feed.on_bar(cb)
         assert cb in feed._callbacks
 
-    def test_subscribe_calls_req_real_time_bars(self) -> None:
-        mock_ib = MagicMock()
-        mock_bars = MagicMock()
-        mock_ib.reqRealTimeBars.return_value = mock_bars
-        feed = MarketDataFeed(ib=mock_ib)
-        feed.subscribe("AAPL")
-        mock_ib.reqRealTimeBars.assert_called_once()
-        args = mock_ib.reqRealTimeBars.call_args
-        assert args[1]["whatToShow"] == "TRADES"
-        assert args[1]["barSize"] == 5
-
-    def test_subscribe_registers_update_event(self) -> None:
-        mock_ib = MagicMock()
-        mock_bars = MagicMock()
-        mock_ib.reqRealTimeBars.return_value = mock_bars
-        feed = MarketDataFeed(ib=mock_ib)
-        # Capture the updateEvent mock BEFORE subscribe() calls `updateEvent += handler`,
-        # because Python's augmented-assignment reassigns the attribute to the __iadd__
-        # return value, so checking mock_bars.updateEvent afterwards reads a different mock.
-        update_event = mock_bars.updateEvent
-        feed.subscribe("AAPL")
-        # updateEvent should have a handler attached
-        update_event.__iadd__.assert_called_once()
-
     def test_shared_ib_connect_is_noop(self) -> None:
         mock_ib = MagicMock()
         feed = MarketDataFeed(ib=mock_ib)
-        import asyncio
         asyncio.run(feed.connect())
         mock_ib.connectAsync.assert_not_called()
 
     def test_shared_ib_disconnect_is_noop(self) -> None:
         mock_ib = MagicMock()
         feed = MarketDataFeed(ib=mock_ib)
-        import asyncio
         asyncio.run(feed.disconnect())
         mock_ib.disconnect.assert_not_called()
 
-    async def test_bar_callback_called_on_update(self) -> None:
-        mock_ib = MagicMock()
-        mock_bars_list = MagicMock()
-        mock_ib.reqRealTimeBars.return_value = mock_bars_list
-        feed = MarketDataFeed(ib=mock_ib)
+    async def test_subscribe_starts_poll_task(self) -> None:
+        feed = MarketDataFeed(ib=MagicMock())
+        hist = _make_history([150.0, 151.0])
+        with patch("src.data_ingestion.feed.yf.Ticker") as mock_ticker_cls:
+            mock_ticker_cls.return_value.history.return_value = hist
+            await feed.subscribe("AAPL")
 
+        assert "AAPL" in feed._subscriptions
+        assert isinstance(feed._subscriptions["AAPL"], asyncio.Task)
+        feed._subscriptions["AAPL"].cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await feed._subscriptions["AAPL"]
+
+    async def test_subscribe_idempotent(self) -> None:
+        feed = MarketDataFeed(ib=MagicMock())
+        hist = _make_history([150.0, 151.0])
+        with patch("src.data_ingestion.feed.yf.Ticker") as mock_ticker_cls:
+            mock_ticker_cls.return_value.history.return_value = hist
+            await feed.subscribe("AAPL")
+            task1 = feed._subscriptions["AAPL"]
+            await feed.subscribe("AAPL")
+            assert feed._subscriptions["AAPL"] is task1
+
+        task1.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task1
+
+    async def test_bar_emitted_from_poll(self) -> None:
+        feed = MarketDataFeed(ib=MagicMock())
         received: list[Bar] = []
+        feed.on_bar(lambda b: received.append(b))
 
-        async def _cb(bar: Bar) -> None:
-            received.append(bar)
+        t0 = datetime(2024, 6, 30, 14, 0, tzinfo=UTC)
+        hist = _make_history([150.0, 151.0, 152.0], base_ts=t0)
 
-        feed.on_bar(_cb)
-        # Capture the updateEvent mock BEFORE subscribe() reassigns it via +=
-        update_event = mock_bars_list.updateEvent
-        feed.subscribe("AAPL")
+        with patch("src.data_ingestion.feed.yf.Ticker") as mock_ticker_cls:
+            mock_ticker_cls.return_value.history.return_value = hist
+            with patch("src.data_ingestion.feed._POLL_INTERVAL", 9999):
+                await feed.subscribe("AAPL")
+                task = feed._subscriptions["AAPL"]
+                # Give the executor-backed poll a moment to complete
+                await asyncio.sleep(0.1)
 
-        # Grab the handler that was registered
-        handler = update_event.__iadd__.call_args[0][0]
-
-        # Build a mock IB bar
-        raw = MagicMock()
-        raw.time = datetime(2024, 1, 1, 10, 0, tzinfo=UTC).timestamp()
-        raw.open_ = 150.0
-        raw.high = 151.0
-        raw.low = 149.0
-        raw.close = 150.5
-        raw.volume = 1000
-
-        mock_bars = [raw]
-        handler(mock_bars, True)
-
-        # give ensure_future a chance to run
-        import asyncio
-        await asyncio.sleep(0)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
 
         assert len(received) == 1
         assert received[0].symbol == "AAPL"
-        assert received[0].close == 150.5
+        # [-2] of a 3-row frame is index 1 → close = 151.0
+        assert received[0].close == 151.0
+
+    async def test_bar_deduplication(self) -> None:
+        """Same timestamp from two consecutive polls should emit only once."""
+        feed = MarketDataFeed(ib=MagicMock())
+        received: list[Bar] = []
+        feed.on_bar(lambda b: received.append(b))
+
+        hist = _make_history([150.0, 151.0])
+
+        call_count = 0
+
+        def _history(**kwargs: object) -> pd.DataFrame:
+            nonlocal call_count
+            call_count += 1
+            return hist
+
+        with patch("src.data_ingestion.feed.yf.Ticker") as mock_ticker_cls:
+            mock_ticker_cls.return_value.history.side_effect = _history
+            with patch("src.data_ingestion.feed._POLL_INTERVAL", 0):
+                await feed.subscribe("AAPL")
+                task = feed._subscriptions["AAPL"]
+                await asyncio.sleep(0.2)  # allow a few poll cycles
+
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        assert call_count >= 2
+        assert len(received) == 1  # same ts → deduplicated
+
+    async def test_emit_called_on_bar(self) -> None:
+        feed = MarketDataFeed(ib=MagicMock())
+        bar = Bar("AAPL", datetime(2024, 1, 1, tzinfo=UTC), 1.0, 2.0, 0.5, 1.5, 100)
+        received: list[Bar] = []
+        feed.on_bar(lambda b: received.append(b))
+        feed._emit(bar)
+        assert received == [bar]
+
+    async def test_async_callback_dispatched(self) -> None:
+        feed = MarketDataFeed(ib=MagicMock())
+        bar = Bar("AAPL", datetime(2024, 1, 1, tzinfo=UTC), 1.0, 2.0, 0.5, 1.5, 100)
+        received: list[Bar] = []
+
+        async def _cb(b: Bar) -> None:
+            received.append(b)
+
+        feed.on_bar(_cb)
+        feed._emit(bar)
+        await asyncio.sleep(0)
+        assert received == [bar]
