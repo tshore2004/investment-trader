@@ -52,7 +52,7 @@ src/
 │   └── templates/
 │       └── index.html    — Live candlestick dashboard (TradingView Lightweight Charts)
 ├── data_ingestion/
-│   ├── feed.py           — MarketDataFeed: reqRealTimeBars, fires BarCallback list; shared IB
+│   ├── feed.py           — MarketDataFeed: yfinance polling (1-min bars), fires BarCallback list
 │   └── store.py          — TimeseriesStore: enables timescaledb extension, inserts bars
 ├── risk/
 │   ├── checks.py         — RiskCheck Protocol + PositionLimitCheck (USD) + DrawdownCheck
@@ -70,11 +70,11 @@ main.py                    — Entry point: shared IB instance, wires all compon
 ## Data flow
 
 ```
-IB TWS / Gateway
+yfinance (free, 15-20 min delayed)
     │
     ▼
-MarketDataFeed.subscribe(symbol)        ← reqRealTimeBars(barSize=5, whatToShow=TRADES)
-    │  Bar(symbol, ts, ohlcv)           via updateEvent → _on_update callback
+MarketDataFeed.subscribe(symbol)        ← polls yfinance every 60s, emits completed 1-min bars
+    │  Bar(symbol, ts, ohlcv)           deduplicates by timestamp
     ▼
 feed callbacks (registered via on_bar):
     ├── TimeseriesStore.insert_bar()    → bars hypertable in TimescaleDB
@@ -167,17 +167,20 @@ FastAPI app runs in the **same asyncio event loop** as the trading engine via `a
 
 See `src/strategies/noop_strategy.py` for the minimal template.
 
-## IB market data subscriptions
+## Market data source
 
-`reqRealTimeBars` with `whatToShow="TRADES"` requires an active market data subscription in TWS.
-Paper accounts without subscriptions receive **Error 420**. To enable:
-- In TWS: subscribe to market data for each symbol under Account Management
-- Or change `whatToShow` to `"MIDPOINT"` for instruments that support it (forex pairs)
+**Paper trading / development:** `MarketDataFeed` uses **yfinance** (free, no IB subscription
+required). Bars are 15-20 min delayed and polled every 60 seconds. No TWS market data
+configuration needed — any stock symbol works immediately.
+
+**Live trading:** Replace the yfinance polling in `feed.py` with IB's
+`reqHistoricalData(keepUpToDate=True)` once a paid market data subscription is active.
+IB's API requires a subscription even for delayed data (Error 10089 otherwise).
 
 ## Testing
 
 ```bash
-python -m uv run pytest              # run all tests (27 tests)
+python -m uv run pytest              # run all tests (30 tests)
 python -m uv run pytest -x -q        # fail fast, quiet
 python -m uv run mypy src/ main.py   # type check (strict)
 python -m uv run ruff check src/ main.py tests/   # lint
