@@ -114,7 +114,7 @@ def create_app() -> FastAPI:
             return {"status": "already_subscribed", "symbol": sym}
         if _feed is None:
             return {"status": "error", "symbol": sym, "detail": "feed not ready"}
-        _feed.subscribe(sym)
+        await _feed.subscribe(sym)
         return {"status": "subscribed", "symbol": sym}
 
     @app.websocket("/ws")

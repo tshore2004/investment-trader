@@ -79,9 +79,10 @@ async def main() -> None:
     feed.on_bar(registry.dispatch)
     feed.on_bar(_bar_to_dashboard)
 
-    set_feed(feed)\n\n    # Subscribe to symbols
+    set_feed(feed)
+
     for symbol in SYMBOLS:
-        feed.subscribe(symbol)
+        await feed.subscribe(symbol)
 
     # Build dashboard server (runs in the same asyncio loop)
     app = create_app()
