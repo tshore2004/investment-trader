@@ -41,6 +41,7 @@ export function renderChart(sym) {
   candleSeries.setData(displayed);
   volSeries.setData(displayed.map(b => ({ time: b.time, value: b.volume, color: b.close >= b.open ? '#3fb95044' : '#f8514944' })));
   updateMetrics(sym, raw, displayed);
+  updateIndicators(displayed);
 }
 
 export function updateMetrics(sym, rawBars, displayedBars) {
@@ -112,6 +113,109 @@ export function setModeBadge(enabled) {
   }
 }
 
+export const SUPPORTED_INDICATORS = ['SMA20', 'EMA9', 'VWAP', 'RSI14'];
+const activeIndicators = new Set();
+const indicatorSeries = {};
+
+function computeSMA(displayed, period) {
+  const out = [];
+  for (let i = period - 1; i < displayed.length; i++) {
+    let sum = 0;
+    for (let j = i - period + 1; j <= i; j++) sum += displayed[j].close;
+    out.push({ time: displayed[i].time, value: sum / period });
+  }
+  return out;
+}
+
+function computeEMA(displayed, period) {
+  if (displayed.length < period) return [];
+  const k = 2 / (period + 1);
+  let seedSum = 0;
+  for (let i = 0; i < period; i++) seedSum += displayed[i].close;
+  let ema = seedSum / period;
+  const out = [{ time: displayed[period - 1].time, value: ema }];
+  for (let i = period; i < displayed.length; i++) {
+    ema = displayed[i].close * k + ema * (1 - k);
+    out.push({ time: displayed[i].time, value: ema });
+  }
+  return out;
+}
+
+// Resets the cumulative price*volume/volume sums whenever the bar's local
+// calendar date changes — bars carry no explicit session marker.
+function computeVWAP(displayed) {
+  const out = [];
+  let cumPV = 0, cumVol = 0, lastDateKey = null;
+  for (const b of displayed) {
+    const d = new Date(b.time * 1000);
+    const dateKey = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+    if (dateKey !== lastDateKey) { cumPV = 0; cumVol = 0; lastDateKey = dateKey; }
+    cumPV += b.close * b.volume;
+    cumVol += b.volume;
+    out.push({ time: b.time, value: cumVol ? cumPV / cumVol : b.close });
+  }
+  return out;
+}
+
+function computeRSI(displayed, period) {
+  if (displayed.length <= period) return [];
+  const closes = displayed.map(b => b.close);
+  let gainSum = 0, lossSum = 0;
+  for (let i = 1; i <= period; i++) {
+    const diff = closes[i] - closes[i - 1];
+    if (diff >= 0) gainSum += diff; else lossSum -= diff;
+  }
+  let avgGain = gainSum / period, avgLoss = lossSum / period;
+  const out = [{ time: displayed[period].time, value: avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss) }];
+  for (let i = period + 1; i < closes.length; i++) {
+    const diff = closes[i] - closes[i - 1];
+    const gain = diff >= 0 ? diff : 0;
+    const loss = diff < 0 ? -diff : 0;
+    avgGain = (avgGain * (period - 1) + gain) / period;
+    avgLoss = (avgLoss * (period - 1) + loss) / period;
+    out.push({ time: displayed[i].time, value: avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss) });
+  }
+  return out;
+}
+
+function updateIndicators(displayed) {
+  for (const name of activeIndicators) {
+    const series = indicatorSeries[name];
+    if (!series) continue;
+    let data;
+    if (name === 'SMA20') data = computeSMA(displayed, 20);
+    else if (name === 'EMA9') data = computeEMA(displayed, 9);
+    else if (name === 'VWAP') data = computeVWAP(displayed);
+    else if (name === 'RSI14') data = computeRSI(displayed, 14);
+    series.setData(data || []);
+  }
+}
+
+const INDICATOR_COLORS = { SMA20: '#F5C518', EMA9: '#79c0ff', VWAP: '#5ce1e6', RSI14: '#c586ff' };
+
+export function toggleIndicator(name, enabled) {
+  if (enabled) {
+    if (indicatorSeries[name]) return;
+    activeIndicators.add(name);
+    if (name === 'RSI14') {
+      // v4.1.3 has no stacked-pane API — fall back to a secondary price scale,
+      // the same technique already used for the volume histogram above.
+      indicatorSeries[name] = chart.addLineSeries({
+        color: INDICATOR_COLORS.RSI14, lineWidth: 1, priceScaleId: 'rsi',
+      });
+      chart.priceScale('rsi').applyOptions({ scaleMargins: { top: 0.85, bottom: 0 } });
+    } else {
+      indicatorSeries[name] = chart.addLineSeries({ color: INDICATOR_COLORS[name], lineWidth: 1 });
+    }
+  } else {
+    activeIndicators.delete(name);
+    const series = indicatorSeries[name];
+    if (series) { chart.removeSeries(series); delete indicatorSeries[name]; }
+  }
+  const raw = state.bars[state.activeSymbol] || [];
+  updateIndicators(resampleBars(raw, state.timeframeSeconds));
+}
+
 window.__renderChart = renderChart;
 window.__updateMetrics = updateMetrics;
 window.__ensureTab = ensureTab;
@@ -120,4 +224,20 @@ window.__setModeBadge = setModeBadge;
 
 window.addEventListener('resize', () => {
   chart.applyOptions({ width: chartEl.offsetWidth, height: chartEl.offsetHeight });
+});
+
+document.getElementById('ind-toggle').onclick = (e) => {
+  e.stopPropagation();
+  document.getElementById('ind-menu').classList.toggle('hidden');
+};
+document.querySelectorAll('#ind-menu .tf-option').forEach(btn => {
+  btn.onclick = () => {
+    const enabled = !btn.classList.contains('active');
+    btn.classList.toggle('active', enabled);
+    toggleIndicator(btn.dataset.ind, enabled);
+  };
+});
+document.addEventListener('click', (e) => {
+  const dd = document.getElementById('ind-dropdown');
+  if (dd && !dd.contains(e.target)) document.getElementById('ind-menu').classList.add('hidden');
 });
