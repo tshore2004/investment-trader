@@ -72,12 +72,18 @@ async def shutdown(
     log.info("shutdown_complete")
 
 
-async def _portfolio_poll_loop(broker: IBBroker) -> None:
+async def _portfolio_poll_loop(broker: IBBroker, store: TimeseriesStore) -> None:
     """Periodically push the current IB portfolio to the dashboard over /ws."""
     while True:
         try:
             rows = broker.portfolio_snapshot()
             await get_state().update_portfolio(rows)
+            total_value = float(
+                sum(row["qty"] * row["price"] for row in rows if row.get("price"))
+            )
+            now = datetime.now(UTC)
+            await store.insert_portfolio_snapshot(total_value, now)
+            await get_state().update_portfolio_value(total_value, now.isoformat())
         except Exception:
             log.exception("portfolio_poll_failed")
         await asyncio.sleep(_PORTFOLIO_POLL_INTERVAL)
@@ -143,7 +149,7 @@ async def main() -> None:
     for symbol in symbols:
         await feed.subscribe(symbol)
 
-    portfolio_task = asyncio.ensure_future(_portfolio_poll_loop(broker))
+    portfolio_task = asyncio.ensure_future(_portfolio_poll_loop(broker, store))
 
     # Build dashboard server (runs in the same asyncio loop)
     app = create_app()
