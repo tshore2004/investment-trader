@@ -2,6 +2,7 @@ import { state } from './state.js';
 import { connect } from './ws.js';
 import { renderChart, switchSymbol, ensureTab } from './chart.js';
 import { setMode } from './compare.js';
+import { initLayout } from './layout.js';
 
 document.getElementById('sym-btn').onclick = async () => {
   const sym = document.getElementById('sym-input').value.toUpperCase().trim();
@@ -55,3 +56,4 @@ document.querySelectorAll('#mode-toggle .sym-tab').forEach(btn => {
 });
 
 connect();
+initLayout();

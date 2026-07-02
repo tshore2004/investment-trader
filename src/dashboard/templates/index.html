@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Hedge Quant Dashboard</title>
 <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/gridstack@12.6.0/dist/gridstack.min.css" />
+<script src="https://cdn.jsdelivr.net/npm/gridstack@12.6.0/dist/gridstack-all.js"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   html, body { height: 100%; overflow: hidden; }
@@ -29,8 +31,9 @@
     70%  { box-shadow: 0 0 0 9px rgba(248, 81, 73, 0); }
     100% { box-shadow: 0 0 0 0 rgba(248, 81, 73, 0); }
   }
-  .grid { display: grid; grid-template-columns: 1fr 320px; gap: 1px; background: #262626; flex: 1 1 auto; min-height: 0; }
-  .panel { background: #0a0a0a; overflow: hidden; display: flex; flex-direction: column; min-height: 0; }
+  .grid-stack { background: #262626; flex: 1 1 auto; min-height: 0; overflow: auto; }
+  .grid-stack-item-content { overflow: hidden !important; background: transparent; }
+  .panel { background: #0a0a0a; overflow: hidden; display: flex; flex-direction: column; min-height: 0; height: 100%; }
   .panel-header { padding: 10px 16px; border-bottom: 1px solid #262626; font-weight: 600; font-size: 12px; color: #a39c8f; text-transform: uppercase; letter-spacing: .6px; display: flex; justify-content: space-between; align-items: center; flex: 0 0 auto; flex-wrap: wrap; row-gap: 6px; }
   #chart { width: 100%; flex: 1 1 auto; min-height: 0; }
   .right-col { display: flex; flex-direction: column; gap: 1px; background: #262626; }
@@ -90,6 +93,11 @@
   <span id="conn-badge" class="badge disconnected">CONNECTING</span>
   <span id="mode-badge" class="badge dryrun">DRY RUN</span>
   <span id="last-ts" style="color:#a39c8f;font-size:11px;margin-left:auto"></span>
+  <select id="layout-preset" style="background:#1a1a1a;border:1px solid #333;color:#eaeaea;padding:5px 8px;border-radius:6px;font-family:inherit;font-size:12px">
+    <option value="trading">Trading</option>
+    <option value="compare">Compare</option>
+    <option value="monitor">Monitor</option>
+  </select>
   <div id="search-bar">
     <input id="sym-input" placeholder="e.g. TSLA" maxlength="8" />
     <button id="sym-btn">Subscribe</button>
@@ -97,90 +105,99 @@
   </div>
 </header>
 
-<div class="grid">
-  <!-- Left: chart -->
-  <div class="panel">
-    <div class="panel-header">
-      <div style="display:flex;gap:12px;align-items:center">
-        <div class="tf-dropdown" id="tf-dropdown">
-          <button class="tf-toggle-btn" id="tf-toggle">&#9776; <span id="tf-current">1m</span></button>
-          <div class="tf-menu hidden" id="tf-menu">
-            <button class="tf-option active" data-tf="60">1m</button>
-            <button class="tf-option" data-tf="300">5m</button>
-            <button class="tf-option" data-tf="600">10m</button>
-            <button class="tf-option" data-tf="1800">30m</button>
-            <button class="tf-option" data-tf="3600">1h</button>
-            <button class="tf-option" data-tf="14400">4h</button>
-            <button class="tf-option" data-tf="86400">1d</button>
+<div class="grid-stack">
+  <div class="grid-stack-item" gs-id="w-chart" gs-x="0" gs-y="0" gs-w="8" gs-h="8">
+    <div class="grid-stack-item-content">
+      <div class="panel">
+        <div class="panel-header">
+          <div style="display:flex;gap:12px;align-items:center">
+            <div class="tf-dropdown" id="tf-dropdown">
+              <button class="tf-toggle-btn" id="tf-toggle">&#9776; <span id="tf-current">1m</span></button>
+              <div class="tf-menu hidden" id="tf-menu">
+                <button class="tf-option active" data-tf="60">1m</button>
+                <button class="tf-option" data-tf="300">5m</button>
+                <button class="tf-option" data-tf="600">10m</button>
+                <button class="tf-option" data-tf="1800">30m</button>
+                <button class="tf-option" data-tf="3600">1h</button>
+                <button class="tf-option" data-tf="14400">4h</button>
+                <button class="tf-option" data-tf="86400">1d</button>
+              </div>
+            </div>
+            <span id="chart-label">1m Bars (delayed)</span>
+            <div class="tf-dropdown" id="ind-dropdown">
+              <button class="tf-toggle-btn" id="ind-toggle">&#8801; Indicators</button>
+              <div class="tf-menu hidden" id="ind-menu">
+                <button class="tf-option" data-ind="SMA20">SMA(20)</button>
+                <button class="tf-option" data-ind="EMA9">EMA(9)</button>
+                <button class="tf-option" data-ind="VWAP">VWAP</button>
+                <button class="tf-option" data-ind="RSI14">RSI(14)</button>
+              </div>
+            </div>
+          </div>
+          <div style="display:flex;gap:16px;align-items:center">
+            <div id="mode-toggle">
+              <button class="sym-tab active" data-mode="chart">Chart</button>
+              <button class="sym-tab" data-mode="compare">Compare</button>
+            </div>
+            <div id="symbol-tabs"></div>
           </div>
         </div>
-        <span id="chart-label">1m Bars (delayed)</span>
-        <div class="tf-dropdown" id="ind-dropdown">
-          <button class="tf-toggle-btn" id="ind-toggle">&#8801; Indicators</button>
-          <div class="tf-menu hidden" id="ind-menu">
-            <button class="tf-option" data-ind="SMA20">SMA(20)</button>
-            <button class="tf-option" data-ind="EMA9">EMA(9)</button>
-            <button class="tf-option" data-ind="VWAP">VWAP</button>
-            <button class="tf-option" data-ind="RSI14">RSI(14)</button>
-          </div>
-        </div>
-      </div>
-      <div style="display:flex;gap:16px;align-items:center">
-        <div id="mode-toggle">
-          <button class="sym-tab active" data-mode="chart">Chart</button>
-          <button class="sym-tab" data-mode="compare">Compare</button>
-        </div>
-        <div id="symbol-tabs"></div>
+        <div id="compare-panel" style="display:none;overflow:auto;flex:1 1 auto"></div>
+        <div id="chart"></div>
       </div>
     </div>
-    <div id="compare-panel" style="display:none;overflow:auto;flex:1 1 auto"></div>
-    <div id="chart"></div>
   </div>
 
-  <!-- Right: metrics + orders + holdings -->
-  <div style="display:flex;flex-direction:column;gap:1px;background:#262626;overflow:hidden">
-    <!-- Metrics -->
-    <div class="metrics">
-      <div class="metric">
-        <div class="metric-label">Last Price</div>
-        <div class="metric-value" id="m-close">—</div>
-      </div>
-      <div class="metric">
-        <div class="metric-label">Volume</div>
-        <div class="metric-value" id="m-vol">—</div>
-      </div>
-      <div class="metric">
-        <div class="metric-label">Position (USD)</div>
-        <div class="metric-value" id="m-pos">—</div>
-      </div>
-      <div class="metric">
-        <div class="metric-label">Bar Count</div>
-        <div class="metric-value" id="m-bars">0</div>
+  <div class="grid-stack-item" gs-id="w-metrics" gs-x="8" gs-y="0" gs-w="4" gs-h="3">
+    <div class="grid-stack-item-content">
+      <div class="metrics" style="height:100%">
+        <div class="metric">
+          <div class="metric-label">Last Price</div>
+          <div class="metric-value" id="m-close">—</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Volume</div>
+          <div class="metric-value" id="m-vol">—</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Position (USD)</div>
+          <div class="metric-value" id="m-pos">—</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Bar Count</div>
+          <div class="metric-value" id="m-bars">0</div>
+        </div>
       </div>
     </div>
+  </div>
 
-    <!-- Orders -->
-    <div class="right-panel" style="flex:1;min-height:0">
-      <div class="panel-header"><span id="orders-header-label">Trade History</span></div>
-      <table id="orders-table">
-        <thead><tr><th>Time</th><th>Side</th><th>Qty</th><th>Status</th></tr></thead>
-        <tbody id="orders-body"></tbody>
-      </table>
-      <div id="no-orders" style="color:#a39c8f;padding:20px;text-align:center;font-size:12px">No orders yet</div>
+  <div class="grid-stack-item" gs-id="w-orders" gs-x="8" gs-y="3" gs-w="4" gs-h="3">
+    <div class="grid-stack-item-content">
+      <div class="right-panel" style="height:100%">
+        <div class="panel-header"><span id="orders-header-label">Trade History</span></div>
+        <table id="orders-table">
+          <thead><tr><th>Time</th><th>Side</th><th>Qty</th><th>Status</th></tr></thead>
+          <tbody id="orders-body"></tbody>
+        </table>
+        <div id="no-orders" style="color:#a39c8f;padding:20px;text-align:center;font-size:12px">No orders yet</div>
+      </div>
     </div>
+  </div>
 
-    <!-- Holdings -->
-    <div class="right-panel" style="flex:0 0 auto;min-height:120px">
-      <div class="panel-header">Holdings</div>
-      <table id="holdings-table">
-        <thead>
-          <tr>
-            <th>Symbol</th><th>Qty</th><th>Avg Cost</th><th>Live Price</th><th>P&amp;L $</th><th>P&amp;L %</th>
-          </tr>
-        </thead>
-        <tbody id="holdings-body"></tbody>
-      </table>
-      <div id="no-holdings" style="color:#a39c8f;padding:12px;text-align:center;font-size:12px">No holdings</div>
+  <div class="grid-stack-item" gs-id="w-holdings" gs-x="8" gs-y="6" gs-w="4" gs-h="2">
+    <div class="grid-stack-item-content">
+      <div class="right-panel" style="height:100%">
+        <div class="panel-header">Holdings</div>
+        <table id="holdings-table">
+          <thead>
+            <tr>
+              <th>Symbol</th><th>Qty</th><th>Avg Cost</th><th>Live Price</th><th>P&amp;L $</th><th>P&amp;L %</th>
+            </tr>
+          </thead>
+          <tbody id="holdings-body"></tbody>
+        </table>
+        <div id="no-holdings" style="color:#a39c8f;padding:12px;text-align:center;font-size:12px">No holdings</div>
+      </div>
     </div>
   </div>
 </div>
