@@ -66,6 +66,28 @@ class IBBroker:
     async def cancel(self, order: Order) -> None:
         log.warning("cancel_not_implemented", order_id=str(order.id))
 
+    def portfolio_snapshot(self) -> list[dict[str, Any]]:
+        """Read current IB positions via ib_insync's PortfolioItem list."""
+        rows: list[dict[str, Any]] = []
+        for item in self._ib.portfolio():
+            qty = item.position
+            avg_cost = item.averageCost
+            price = item.marketPrice
+            pnl = item.unrealizedPNL
+            cost_basis = avg_cost * qty
+            pnl_pct = (pnl / abs(cost_basis) * 100.0) if cost_basis else 0.0
+            rows.append(
+                {
+                    "symbol": item.contract.symbol,
+                    "qty": qty,
+                    "avg_cost": avg_cost,
+                    "price": price,
+                    "unrealized_pnl": pnl,
+                    "unrealized_pnl_pct": pnl_pct,
+                }
+            )
+        return rows
+
     @property
     def is_connected(self) -> bool:
         return bool(self._ib.isConnected())

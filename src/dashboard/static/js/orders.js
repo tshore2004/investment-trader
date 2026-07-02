@@ -1,33 +1,53 @@
-import { state } from './state.js';
+// Trade History widget factory — one instance per (widget, symbol).
+export function createOrdersWidget(container, config) {
+  let orders = [];
 
-export function renderOrders() {
-  const tbody = document.getElementById('orders-body');
-  const none = document.getElementById('no-orders');
-  const orders = state.orders || [];
-  if (orders.length === 0) { tbody.innerHTML = ''; none.style.display = 'block'; return; }
-  none.style.display = 'none';
-  tbody.innerHTML = orders.slice().reverse().map(o => {
-    const rawTs = o.submitted_at || o.timestamp;
-    const ts = rawTs ? new Date(rawTs).toLocaleString() : '—';
-    return `
-    <tr>
-      <td>${ts}</td>
-      <td class="side-${(o.side || '').toLowerCase()}">${o.side}</td>
-      <td>${o.quantity}</td>
-      <td class="status-${(o.status || '').toLowerCase()}">${o.status}</td>
-    </tr>`;
-  }).join('');
-}
+  container.innerHTML = `
+    <div class="right-panel" style="height:100%">
+      <div class="panel-header"><span class="w-orders-label">Trade History — ${config.symbol}</span></div>
+      <table>
+        <thead><tr><th>Time</th><th>Side</th><th>Qty</th><th>Status</th></tr></thead>
+        <tbody class="w-orders-body"></tbody>
+      </table>
+      <div class="w-no-orders" style="color:#a39c8f;padding:20px;text-align:center;font-size:12px">No orders yet</div>
+    </div>`;
 
-export async function loadOrderHistory(sym) {
-  document.getElementById('orders-header-label').textContent = `Trade History — ${sym}`;
-  try {
-    const r = await fetch('/api/orders/' + encodeURIComponent(sym));
-    state.orders = await r.json();
-  } catch (e) {
-    state.orders = [];
+  const tbody = container.querySelector('.w-orders-body');
+  const none = container.querySelector('.w-no-orders');
+
+  function render() {
+    if (orders.length === 0) { tbody.innerHTML = ''; none.style.display = 'block'; return; }
+    none.style.display = 'none';
+    tbody.innerHTML = orders.slice().reverse().map(o => {
+      const rawTs = o.submitted_at || o.timestamp;
+      const ts = rawTs ? new Date(rawTs).toLocaleString() : '—';
+      return `
+      <tr>
+        <td>${ts}</td>
+        <td class="side-${(o.side || '').toLowerCase()}">${o.side}</td>
+        <td>${o.quantity}</td>
+        <td class="status-${(o.status || '').toLowerCase()}">${o.status}</td>
+      </tr>`;
+    }).join('');
   }
-  renderOrders();
-}
 
-window.__renderOrders = renderOrders;
+  async function load() {
+    try {
+      const r = await fetch('/api/orders/' + encodeURIComponent(config.symbol));
+      orders = await r.json();
+    } catch (e) {
+      orders = [];
+    }
+    render();
+  }
+
+  load();
+
+  return {
+    addOrder(order) {
+      if (order.symbol === config.symbol) { orders.push(order); render(); }
+    },
+    getConfig() { return { symbol: config.symbol }; },
+    destroy() {},
+  };
+}

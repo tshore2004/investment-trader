@@ -1,4 +1,19 @@
 import { state } from './state.js';
+import {
+  dispatchBar, dispatchPortfolioValue, dispatchOrder,
+  dispatchHoldings, dispatchPosition,
+} from './widgets.js';
+
+export function setModeBadge(enabled) {
+  const el = document.getElementById('mode-badge');
+  if (enabled) {
+    el.textContent = 'LIVE PAPER TRADING';
+    el.className = 'badge live-trading';
+  } else {
+    el.textContent = 'DRY RUN';
+    el.className = 'badge dryrun';
+  }
+}
 
 function handleMessage(msg) {
   if (msg.type === 'snapshot') {
@@ -7,12 +22,16 @@ function handleMessage(msg) {
     state.watchlist = msg.watchlist || [];
     state.tradingEnabled = !!msg.trading_enabled;
     for (const [sym, bars] of Object.entries(msg.bars || {})) {
-      state.bars[sym] = bars;
-      window.__ensureTab(sym);
+      // In-memory server bars are the freshest; widgets backfill deeper
+      // history from /api/bars themselves.
+      const merged = new Map();
+      for (const b of (state.bars[sym] || [])) merged.set(b.time, b);
+      for (const b of bars) merged.set(b.time, b);
+      state.bars[sym] = Array.from(merged.values()).sort((a, b) => a.time - b.time);
+      dispatchBar(sym);
     }
-    if (state.activeSymbol) window.__switchSymbol(state.activeSymbol);
-    window.__renderHoldings();
-    window.__setModeBadge(state.tradingEnabled);
+    dispatchHoldings();
+    setModeBadge(state.tradingEnabled);
   } else if (msg.type === 'bar') {
     const sym = msg.symbol;
     if (!state.bars[sym]) state.bars[sym] = [];
@@ -22,23 +41,22 @@ function handleMessage(msg) {
     } else {
       state.bars[sym].push(msg.data);
     }
-    window.__ensureTab(sym);
-    if (state.mode === 'chart' && state.activeSymbol === sym) {
-      window.__renderChart(sym);
-    } else if (state.mode === 'compare') {
-      window.__renderCompareMetrics();
-    }
+    const tsEl = document.getElementById('last-ts');
+    if (tsEl) tsEl.textContent = new Date(msg.data.time * 1000).toLocaleTimeString();
+    dispatchBar(sym);
   } else if (msg.type === 'order') {
-    if (msg.data.symbol === state.activeSymbol) {
-      state.orders.push(msg.data);
-      window.__renderOrders();
-    }
+    dispatchOrder(msg.data);
   } else if (msg.type === 'position') {
     state.positions[msg.symbol] = msg.value;
-    if (state.activeSymbol === msg.symbol) window.__updateMetrics(msg.symbol);
+    dispatchPosition(msg.symbol);
   } else if (msg.type === 'portfolio') {
     state.portfolio = msg.data || [];
-    window.__renderHoldings();
+    dispatchHoldings();
+  } else if (msg.type === 'portfolio_value') {
+    dispatchPortfolioValue({
+      time: Math.floor(new Date(msg.timestamp).getTime() / 1000),
+      value: msg.value,
+    });
   }
 }
 

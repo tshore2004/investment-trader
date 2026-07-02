@@ -1,8 +1,8 @@
 ﻿import logging
 import sys
+from typing import cast
 
 import structlog
-from typing import cast
 
 from src.utils.config import get_settings
 

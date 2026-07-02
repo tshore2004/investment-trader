@@ -1,6 +1,10 @@
+// Reserved sentinel for the Chart widget's portfolio mode — not a valid
+// ticker, so it can never collide with a real subscription.
+export const PORTFOLIO_SYMBOL = '__PORTFOLIO__';
+
 export const state = {
-  bars: {}, orders: [], positions: {}, activeSymbol: null, portfolio: [], watchlist: [],
-  tradingEnabled: false, timeframeSeconds: 60, mode: 'chart', compareSymbols: [], compareColors: {},
+  bars: {}, positions: {}, portfolio: [], watchlist: [],
+  tradingEnabled: false,
 };
 
 export const COMPARE_PALETTE = ['#F5C518', '#79c0ff', '#3fb950', '#f85149', '#c586ff', '#ff9d5c', '#5ce1e6', '#eaeaea'];
@@ -22,13 +26,4 @@ export function resampleBars(bars, seconds) {
     }
   }
   return Array.from(buckets.values()).sort((a, b) => a.time - b.time);
-}
-
-export function colorForCompareSymbol(sym) {
-  if (!state.compareColors[sym]) {
-    const used = new Set(Object.values(state.compareColors));
-    const next = COMPARE_PALETTE.find(c => !used.has(c)) || COMPARE_PALETTE[state.compareSymbols.length % COMPARE_PALETTE.length];
-    state.compareColors[sym] = next;
-  }
-  return state.compareColors[sym];
 }

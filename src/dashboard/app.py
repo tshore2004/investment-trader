@@ -65,6 +65,11 @@ class DashboardState:
         self.portfolio = rows
         await self._broadcast({"type": "portfolio", "data": rows})
 
+    async def update_portfolio_value(self, value: float, timestamp: str) -> None:
+        await self._broadcast(
+            {"type": "portfolio_value", "value": value, "timestamp": timestamp}
+        )
+
     def snapshot(self) -> dict[str, Any]:
         return {"type": "snapshot",
                 "bars": {s: list(b) for s, b in self.bars.items()},
@@ -142,6 +147,12 @@ def create_app() -> FastAPI:
         if _broker is None:
             return []
         return _broker.portfolio_snapshot()
+
+    @app.get("/api/portfolio/history")
+    async def portfolio_history() -> list[dict[str, Any]]:
+        if _store is None:
+            return []
+        return await _store.get_portfolio_history()
 
     @app.get("/api/orders/{symbol}")
     async def orders_for_symbol(symbol: str) -> list[dict[str, Any]]:

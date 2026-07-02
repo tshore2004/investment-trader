@@ -9,47 +9,104 @@ asyncio.set_event_loop(asyncio.new_event_loop())
 
 import signal  # noqa: E402
 import sys  # noqa: E402
+from datetime import UTC, datetime  # noqa: E402
 from typing import Any  # noqa: E402
 
 import ib_insync as ibi  # noqa: E402
 import uvicorn  # noqa: E402
 
 from src.broker.ib_broker import IBBroker  # noqa: E402
-from src.dashboard.app import create_app, get_state, set_feed  # noqa: E402
+from src.broker.order import Order  # noqa: E402
+from src.dashboard.app import (  # noqa: E402
+    OrderEvent,
+    create_app,
+    get_state,
+    set_broker,
+    set_feed,
+    set_store,
+)
 from src.data_ingestion.feed import Bar, MarketDataFeed  # noqa: E402
 from src.data_ingestion.store import TimeseriesStore  # noqa: E402
 from src.risk.engine import RiskEngine  # noqa: E402
-from src.strategies.noop_strategy import NoOpStrategy  # noqa: E402
 from src.strategies.registry import StrategyRegistry  # noqa: E402
+from src.strategies.sma_crossover import SmaCrossoverStrategy  # noqa: E402
 from src.utils import get_logger, get_settings  # noqa: E402
 from src.utils.logging import configure_logging  # noqa: E402
 
 log = get_logger(__name__)
 
-SYMBOLS = ["AAPL"]
+# Paper-trading only: refuse to run against a live TWS/Gateway port.
+_ALLOWED_IB_PORTS = {7497, 4002}
+
+_PORTFOLIO_POLL_INTERVAL = 10.0
 
 
 async def _bar_to_dashboard(bar: Bar) -> None:
     await get_state().add_bar(bar)
 
 
+async def _order_to_dashboard(order: Order) -> None:
+    await get_state().add_order(
+        OrderEvent(
+            order_id=str(order.id),
+            symbol=order.symbol,
+            side=order.side.value,
+            quantity=order.quantity,
+            status=order.status.value,
+            timestamp=(order.submitted_at or datetime.now(UTC)).isoformat(),
+        )
+    )
+
+
 async def shutdown(
     shared_ib: ibi.IB,
     store: TimeseriesStore,
     server: uvicorn.Server,
+    portfolio_task: asyncio.Task[None],
 ) -> None:
     log.info("shutdown_initiated")
     server.should_exit = True
+    portfolio_task.cancel()
     shared_ib.disconnect()  # type: ignore[no-untyped-call]
     await store.close()
     log.info("shutdown_complete")
+
+
+async def _portfolio_poll_loop(broker: IBBroker, store: TimeseriesStore) -> None:
+    """Periodically push the current IB portfolio to the dashboard over /ws."""
+    while True:
+        try:
+            rows = broker.portfolio_snapshot()
+            await get_state().update_portfolio(rows)
+            total_value = float(
+                sum(row["qty"] * row["price"] for row in rows if row.get("price"))
+            )
+            now = datetime.now(UTC)
+            await store.insert_portfolio_snapshot(total_value, now)
+            await get_state().update_portfolio_value(total_value, now.isoformat())
+        except Exception:
+            log.exception("portfolio_poll_failed")
+        await asyncio.sleep(_PORTFOLIO_POLL_INTERVAL)
 
 
 async def main() -> None:
     configure_logging()
     settings = get_settings()
 
-    log.info("starting", symbols=SYMBOLS, ib_port=settings.ib_port)
+    if settings.ib_port not in _ALLOWED_IB_PORTS:
+        raise RuntimeError(
+            f"Refusing to start: IB_PORT={settings.ib_port} is not a paper-trading port "
+            f"(allowed: {sorted(_ALLOWED_IB_PORTS)}). This system is paper-only."
+        )
+
+    symbols = settings.watchlist()
+
+    log.info(
+        "starting",
+        symbols=symbols,
+        ib_port=settings.ib_port,
+        trading_enabled=settings.trading_enabled,
+    )
 
     shared_ib = ibi.IB()  # type: ignore[no-untyped-call]
 
@@ -70,8 +127,10 @@ async def main() -> None:
     # Connect to TimescaleDB
     await store.connect()
 
-    # Register placeholder strategy
-    strategy = NoOpStrategy(broker=broker, risk=risk)
+    # Register the baseline SMA crossover strategy (dry-run unless TRADING_ENABLED=true)
+    strategy = SmaCrossoverStrategy(broker=broker, risk=risk)
+    strategy.on_order(store.insert_order)
+    strategy.on_order(_order_to_dashboard)
     registry.register(strategy)
 
     # Wire feed callbacks: persist bars + dispatch to strategies + push to dashboard
@@ -80,9 +139,17 @@ async def main() -> None:
     feed.on_bar(_bar_to_dashboard)
 
     set_feed(feed)
+    set_broker(broker)
+    set_store(store)
 
-    for symbol in SYMBOLS:
+    dashboard_state = get_state()
+    dashboard_state.watchlist = symbols
+    dashboard_state.trading_enabled = settings.trading_enabled
+
+    for symbol in symbols:
         await feed.subscribe(symbol)
+
+    portfolio_task = asyncio.ensure_future(_portfolio_poll_loop(broker, store))
 
     # Build dashboard server (runs in the same asyncio loop)
     app = create_app()
@@ -99,7 +166,7 @@ async def main() -> None:
     loop = asyncio.get_running_loop()
 
     def _signal_handler(*_: Any) -> None:
-        asyncio.ensure_future(shutdown(shared_ib, store, server))
+        asyncio.ensure_future(shutdown(shared_ib, store, server, portfolio_task))
 
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
