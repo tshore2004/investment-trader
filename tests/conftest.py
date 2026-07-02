@@ -11,6 +11,7 @@ without hitting eventkit's initialisation code again.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 
 
 def pytest_configure(config: object) -> None:
@@ -22,7 +23,5 @@ def pytest_configure(config: object) -> None:
     # Eagerly initialise ib_insync while the loop is available so that
     # subsequent lazy imports (inside src/) hit the module cache, not
     # eventkit's loop-requiring __init__ code.
-    try:
+    with contextlib.suppress(Exception):
         import ib_insync  # noqa: F401
-    except Exception:
-        pass

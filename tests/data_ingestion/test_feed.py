@@ -95,10 +95,12 @@ class TestMarketDataFeed:
         with pytest.raises(asyncio.CancelledError):
             await task
 
-        assert len(received) == 1
+        # Fresh subscribe backfills every completed bar (all but the still-forming
+        # last row), so a 3-row frame yields 2 completed bars: index 0 and 1.
+        assert len(received) == 2
         assert received[0].symbol == "AAPL"
-        # [-2] of a 3-row frame is index 1 → close = 151.0
-        assert received[0].close == 151.0
+        assert received[0].close == 150.0
+        assert received[1].close == 151.0
 
     async def test_bar_deduplication(self) -> None:
         """Same timestamp from two consecutive polls should emit only once."""

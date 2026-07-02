@@ -3,8 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Any
+from datetime import UTC, datetime
 
 import ib_insync as ibi
 import yfinance as yf
@@ -43,7 +42,7 @@ class MarketDataFeed:
     async def connect(self) -> None:
         if not self._owns_ib:
             return
-        await self._ib.connectAsync(  # type: ignore[no-untyped-call]
+        await self._ib.connectAsync(
             host=self._settings.ib_host,
             port=self._settings.ib_port,
             clientId=self._settings.ib_client_id,
@@ -53,7 +52,7 @@ class MarketDataFeed:
     async def disconnect(self) -> None:
         if not self._owns_ib:
             return
-        self._ib.disconnect()
+        self._ib.disconnect()  # type: ignore[no-untyped-call]
 
     def on_bar(self, callback: BarCallback) -> None:
         self._callbacks.append(callback)
@@ -74,22 +73,31 @@ class MarketDataFeed:
 
         while True:
             try:
+                # Yahoo's 1-minute intraday data is only available for the trailing
+                # 7 days. Backfill that full window on the first poll for a symbol
+                # so higher-timeframe views (10m/1h/4h/1d) have more than a single
+                # session to aggregate over; subsequent polls only need today.
+                period = "7d" if last_ts is None else "1d"
+
                 # Run blocking yfinance call in a thread so the event loop stays free.
                 ticker_obj = yf.Ticker(symbol)
                 hist = await loop.run_in_executor(
                     None,
-                    lambda: ticker_obj.history(period="1d", interval="1m"),
+                    lambda t, p: t.history(period=p, interval="1m"),
+                    ticker_obj,
+                    period,
                 )
 
                 if hist is not None and len(hist) >= 2:
-                    row = hist.iloc[-2]  # [-1] is still forming; [-2] is last completed bar
-                    ts: datetime = row.name.to_pydatetime()
-                    if ts.tzinfo is None:
-                        ts = ts.replace(tzinfo=timezone.utc)
-                    else:
-                        ts = ts.astimezone(timezone.utc)
+                    # [-1] is still forming; everything before it is a completed bar.
+                    # Emit every completed bar newer than last_ts so a fresh subscribe
+                    # backfills the day's history instead of only showing new bars.
+                    for _, row in hist.iloc[:-1].iterrows():
+                        ts: datetime = row.name.to_pydatetime()
+                        ts = ts.replace(tzinfo=UTC) if ts.tzinfo is None else ts.astimezone(UTC)
 
-                    if ts != last_ts:
+                        if last_ts is not None and ts <= last_ts:
+                            continue
                         last_ts = ts
                         bar = Bar(
                             symbol=symbol,

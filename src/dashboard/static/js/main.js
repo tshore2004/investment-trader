@@ -1,8 +1,9 @@
 import { state } from './state.js';
 import { connect } from './ws.js';
-import { renderChart, switchSymbol, ensureTab } from './chart.js';
+import { chart, renderChart, switchSymbol, ensureTab } from './chart.js';
 import { setMode } from './compare.js';
 import { initLayout } from './layout.js';
+import './holdings.js';
 
 document.getElementById('sym-btn').onclick = async () => {
   const sym = document.getElementById('sym-input').value.toUpperCase().trim();
@@ -43,6 +44,11 @@ document.querySelectorAll('#tf-menu .tf-option').forEach(btn => {
       window.__renderCompareMetrics();
     } else {
       renderChart();
+      // Switching granularity swaps in a differently-sized dataset; without
+      // this the chart keeps its old zoom/pan window (sized for the previous
+      // timeframe's bar count) and the new bars render squeezed into a
+      // corner of a mostly-empty chart.
+      chart.timeScale().fitContent();
     }
   };
 });

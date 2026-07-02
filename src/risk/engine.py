@@ -16,13 +16,17 @@ class RiskEngine:
             PositionLimitCheck(),
         ]
         self._portfolio: dict[str, float] = {}
+        self._last_prices: dict[str, float] = {}
 
     def update_position(self, symbol: str, usd_value: float) -> None:
         self._portfolio[symbol] = usd_value
 
+    def update_price(self, symbol: str, price: float) -> None:
+        self._last_prices[symbol] = price
+
     def approve(self, order: Order) -> tuple[bool, str]:
         for check in self._checks:
-            passed, reason = check.check(order, self._portfolio)
+            passed, reason = check.check(order, self._portfolio, self._last_prices)
             if not passed:
                 log.warning("order_rejected", order_id=str(order.id), reason=reason)
                 return False, reason

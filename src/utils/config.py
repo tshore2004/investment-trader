@@ -1,4 +1,5 @@
 ﻿from functools import lru_cache
+
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -24,9 +25,18 @@ class Settings(BaseSettings):
     max_portfolio_drawdown_pct: float = 0.05
     max_order_size: int = 100
 
+    # Trading / strategy
+    trading_enabled: bool = False
+    max_trades_per_day: int = 5
+    watchlist_symbols: str = "AAPL"
+
     # Logging
     log_level: str = "INFO"
     log_format: str = "json"
+
+    def watchlist(self) -> list[str]:
+        """Parse WATCHLIST_SYMBOLS (comma-separated) into a clean symbol list."""
+        return [s.strip().upper() for s in self.watchlist_symbols.split(",") if s.strip()]
 
 
 @lru_cache(maxsize=1)

@@ -33,6 +33,15 @@ function applyPreset(name) {
   grid.load(PRESETS[name] || PRESETS.trading);
 }
 
+// The chart is constructed (in chart.js) at module-import time, before
+// GridStack has applied any grid sizing to its container — so its canvas
+// is born at whatever size the container happened to have pre-layout
+// (often near-zero). Resize it once the real layout is in place.
+function resizeChart() {
+  const chartEl = document.getElementById('chart');
+  if (chartEl) chart.applyOptions({ width: chartEl.offsetWidth, height: chartEl.offsetHeight });
+}
+
 function saveLayout() {
   if (!grid) return;
   localStorage.setItem(STORAGE_KEY, JSON.stringify(grid.save(false)));
@@ -52,6 +61,7 @@ export function initLayout() {
     }
   }
   if (!restored) applyPreset('trading');
+  resizeChart();
 
   let debounceTimer;
   grid.on('change', () => {
@@ -59,15 +69,13 @@ export function initLayout() {
     debounceTimer = setTimeout(saveLayout, 500);
   });
 
-  grid.on('resizestop', () => {
-    const chartEl = document.getElementById('chart');
-    if (chartEl) chart.applyOptions({ width: chartEl.offsetWidth, height: chartEl.offsetHeight });
-  });
+  grid.on('resizestop', resizeChart);
 
   const presetSelect = document.getElementById('layout-preset');
   if (presetSelect) {
     presetSelect.addEventListener('change', () => {
       applyPreset(presetSelect.value);
+      resizeChart();
       saveLayout();
     });
   }

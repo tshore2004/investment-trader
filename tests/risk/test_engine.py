@@ -46,3 +46,14 @@ class TestRiskEngine:
         passed, reason = engine.approve(order)
         assert not passed
         assert "Drawdown" in reason
+
+    def test_update_price_enables_usd_exposure_check_for_market_orders(self) -> None:
+        engine = RiskEngine(peak_nav=100_000.0)
+        engine.update_price("AAPL", 600.0)
+        # 90 shares * $600 = $54,000 > max_position_usd 50_000; would have passed
+        # under the old raw share-count fallback (max_order_size=100).
+        order = Order(symbol="AAPL", side=OrderSide.BUY, quantity=90,
+                      order_type=OrderType.MARKET)
+        passed, reason = engine.approve(order)
+        assert not passed
+        assert "PositionLimit" in reason

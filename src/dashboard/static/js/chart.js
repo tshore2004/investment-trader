@@ -1,6 +1,21 @@
 import { state, resampleBars } from './state.js';
 import { loadOrderHistory } from './orders.js';
 
+// Below 1h, bars within a day are the common case — time-of-day alone is
+// unambiguous. At 1h and above, a chart routinely spans multiple days, so a
+// time-only label ("08:00 PM") repeats for every day shown and looks broken;
+// switch to a date (plus time for 1h/4h, where same-day bars still need it).
+function formatTickTime(time) {
+  const d = new Date(time * 1000);
+  if (state.timeframeSeconds >= 86400) {
+    return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+  }
+  if (state.timeframeSeconds >= 3600) {
+    return d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  }
+  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
 const chartEl = document.getElementById('chart');
 export const chart = LightweightCharts.createChart(chartEl, {
   layout: { background: { color: '#0a0a0a' }, textColor: '#a39c8f' },
@@ -11,10 +26,10 @@ export const chart = LightweightCharts.createChart(chartEl, {
     borderColor: '#262626',
     timeVisible: true,
     secondsVisible: true,
-    tickMarkFormatter: (time) => new Date(time * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    tickMarkFormatter: (time) => formatTickTime(time),
   },
   localization: {
-    timeFormatter: (time) => new Date(time * 1000).toLocaleTimeString(),
+    timeFormatter: (time) => formatTickTime(time),
   },
   width: chartEl.offsetWidth,
   height: chartEl.offsetHeight,
