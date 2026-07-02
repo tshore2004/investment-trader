@@ -3,12 +3,14 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import pathlib as _pl
 from collections import deque
 from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Any
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 
 from src.data_ingestion.feed import Bar
 from src.utils import get_logger
@@ -121,10 +123,15 @@ def set_store(store: TimeseriesStore) -> None:
 def create_app() -> FastAPI:
     app = FastAPI(title="Hedge Quant Dashboard")
 
+    _static_dir = _pl.Path(__file__).parent / "static"
+    app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
+
     @app.get("/", response_class=HTMLResponse)
-    async def index() -> str:
-        import pathlib as _pl
-        return (_pl.Path(__file__).parent / "templates" / "index.html").read_text(encoding="utf-8")
+    async def index(request: Request) -> str:
+        templates_dir = _pl.Path(__file__).parent / "templates"
+        is_legacy = request.query_params.get("legacy") == "1"
+        filename = "index_legacy.html" if is_legacy else "index.html"
+        return (templates_dir / filename).read_text(encoding="utf-8")
 
     @app.get("/api/snapshot")
     async def snapshot() -> dict[str, Any]:
