@@ -14,7 +14,9 @@ from src.data_ingestion.feed import Bar
 from src.utils import get_logger
 
 if TYPE_CHECKING:
+    from src.broker.ib_broker import IBBroker
     from src.data_ingestion.feed import MarketDataFeed
+    from src.data_ingestion.store import TimeseriesStore
 
 log = get_logger(__name__)
 _MAX_BARS = 200
@@ -35,6 +37,9 @@ class DashboardState:
         self.bars: dict[str, deque[dict[str, Any]]] = {}
         self.orders: deque[dict[str, Any]] = deque(maxlen=50)
         self.positions: dict[str, float] = {}
+        self.portfolio: list[dict[str, Any]] = []
+        self.watchlist: list[str] = []
+        self.trading_enabled: bool = False
         self._clients: list[WebSocket] = []
         self._lock = asyncio.Lock()
 
@@ -54,10 +59,16 @@ class DashboardState:
         self.positions[symbol] = usd_value
         await self._broadcast({"type": "position", "symbol": symbol, "value": usd_value})
 
+    async def update_portfolio(self, rows: list[dict[str, Any]]) -> None:
+        self.portfolio = rows
+        await self._broadcast({"type": "portfolio", "data": rows})
+
     def snapshot(self) -> dict[str, Any]:
         return {"type": "snapshot",
                 "bars": {s: list(b) for s, b in self.bars.items()},
-                "orders": list(self.orders), "positions": dict(self.positions)}
+                "orders": list(self.orders), "positions": dict(self.positions),
+                "portfolio": list(self.portfolio), "watchlist": list(self.watchlist),
+                "trading_enabled": self.trading_enabled}
 
     async def connect_client(self, ws: WebSocket) -> None:
         await ws.accept()
@@ -84,6 +95,8 @@ class DashboardState:
 
 _state = DashboardState()
 _feed: MarketDataFeed | None = None
+_broker: IBBroker | None = None
+_store: TimeseriesStore | None = None
 
 
 def get_state() -> DashboardState:
@@ -93,6 +106,16 @@ def get_state() -> DashboardState:
 def set_feed(feed: MarketDataFeed) -> None:
     global _feed
     _feed = feed
+
+
+def set_broker(broker: IBBroker) -> None:
+    global _broker
+    _broker = broker
+
+
+def set_store(store: TimeseriesStore) -> None:
+    global _store
+    _store = store
 
 
 def create_app() -> FastAPI:
@@ -106,6 +129,24 @@ def create_app() -> FastAPI:
     @app.get("/api/snapshot")
     async def snapshot() -> dict[str, Any]:
         return _state.snapshot()
+
+    @app.get("/api/portfolio")
+    async def portfolio() -> list[dict[str, Any]]:
+        if _broker is None:
+            return []
+        return _broker.portfolio_snapshot()
+
+    @app.get("/api/orders/{symbol}")
+    async def orders_for_symbol(symbol: str) -> list[dict[str, Any]]:
+        if _store is None:
+            return []
+        return await _store.get_orders(symbol.upper().strip())
+
+    @app.get("/api/bars/{symbol}")
+    async def bars_for_symbol(symbol: str) -> list[dict[str, Any]]:
+        if _store is None:
+            return []
+        return await _store.get_bars(symbol.upper().strip())
 
     @app.post("/api/subscribe/{symbol}")
     async def subscribe(symbol: str) -> dict[str, str]:
