@@ -45,26 +45,51 @@ via internal asyncio tasks — no explicit run call is needed. `MarketDataFeed.r
 ```
 src/
 ├── broker/
-│   ├── ib_broker.py      — IBBroker: accepts optional shared ibi.IB(); connect/submit/cancel
+│   ├── ib_broker.py      — IBBroker: accepts optional shared ibi.IB(); connect/submit/cancel/
+│   │                        portfolio_snapshot() (reads ib_insync's portfolio() for the dashboard)
 │   └── order.py          — Order dataclass + OrderSide / OrderType / OrderStatus enums
 ├── dashboard/
-│   ├── app.py            — FastAPI app: /ws WebSocket broadcast, /api/snapshot, DashboardState
-│   └── templates/
-│       └── index.html    — Live candlestick dashboard (TradingView Lightweight Charts)
+│   ├── app.py            — FastAPI app: /ws WebSocket broadcast, /api/snapshot,
+│   │                        /api/portfolio/history, DashboardState
+│   ├── templates/
+│   │   └── index.html    — Dashboard shell: header + empty <div class="grid-stack">;
+│   │                        widgets are created dynamically by layout.js/widgets.js
+│   └── static/js/        — ES modules (no bundler, served via FastAPI StaticFiles):
+│       ├── widgets.js     — Widget registry: WIDGET_TYPES catalog, createWidget/destroyWidget,
+│       │                    dispatchBar/dispatchPortfolioValue/dispatchOrder/dispatchHoldings/
+│       │                    dispatchPosition fan-out to instances
+│       ├── chart.js       — createChartWidget(container, config, hooks): per-instance
+│       │                    lightweight-charts chart; SMA/EMA/VWAP/RSI indicators; a config.symbol
+│       │                    of PORTFOLIO_SYMBOL switches to a portfolio-value line chart
+│       ├── orders.js      — createOrdersWidget: per-instance trade history table
+│       ├── holdings.js    — createHoldingsWidget: portfolio-wide holdings table
+│       ├── compare.js     — createCompareWidget: correlation/volatility table + sparklines
+│       ├── state.js       — shared `state` (bars/positions/portfolio/watchlist/tradingEnabled),
+│       │                    PORTFOLIO_SYMBOL sentinel ('__PORTFOLIO__'), resampleBars
+│       ├── ws.js           — WebSocket connect/reconnect; dispatches each message type to widgets.js
+│       ├── layout.js       — GridStack wiring, "+ Add View" menu, full-workspace localStorage
+│       │                    persistence (key `hedge-dashboard-layout`), Trading/Compare/Monitor
+│       │                    starting templates
+│       └── main.js         — entry point: header symbol search, initLayout(), connect()
 ├── data_ingestion/
 │   ├── feed.py           — MarketDataFeed: yfinance polling (1-min bars), fires BarCallback list
-│   └── store.py          — TimeseriesStore: enables timescaledb extension, inserts bars
+│   └── store.py          — TimeseriesStore: bars + portfolio_value hypertables;
+│                            insert_portfolio_snapshot()/get_portfolio_history()
 ├── risk/
-│   ├── checks.py         — RiskCheck Protocol + PositionLimitCheck (USD) + DrawdownCheck
+│   ├── checks.py         — RiskCheck Protocol + PositionLimitCheck (USD, price-aware for market
+│   │                        orders via injected last_prices) + DrawdownCheck
 │   └── engine.py         — RiskEngine: DrawdownCheck first, then PositionLimitCheck
 ├── strategies/
-│   ├── base.py           — BaseStrategy ABC: submit() always calls RiskEngine.approve() first
-│   ├── noop_strategy.py  — NoOpStrategy: logs every bar, places no orders (placeholder)
-│   └── registry.py       — StrategyRegistry: register/unregister, dispatches Bar to all
+│   ├── base.py            — BaseStrategy ABC: submit() always calls RiskEngine.approve() first
+│   ├── noop_strategy.py   — NoOpStrategy: logs every bar, places no orders (documented template)
+│   ├── sma_crossover.py   — SmaCrossoverStrategy: fast/slow SMA crossover, one position per
+│   │                        symbol, respects TRADING_ENABLED (dry-run logs) and MAX_TRADES_PER_DAY
+│   └── registry.py        — StrategyRegistry: register/unregister, dispatches Bar to all
 └── utils/
     ├── config.py          — Settings (pydantic-settings, extra="ignore"), cached via lru_cache
     └── logging.py         — structlog setup (json or console renderer)
-main.py                    — Entry point: shared IB instance, wires all components, runs gather
+main.py                    — Entry point: shared IB instance, wires all components, runs gather,
+                              _portfolio_poll_loop (10s: snapshot → store → WS broadcast)
 ```
 
 ## Data flow
@@ -131,10 +156,12 @@ See `.env.example` for the full list. Critical ones:
 
 ## Risk checks
 
-`PositionLimitCheck` computes **USD exposure** = `order.quantity × order.limit_price` and
-compares it against `MAX_POSITION_USD`. For market orders (no `limit_price`), it falls back to
-comparing raw share count against `MAX_ORDER_SIZE` — see the `# FIXME` comment in
-`src/risk/checks.py` for the known limitation.
+`PositionLimitCheck` computes **USD exposure** = `order.quantity × price` and compares it
+against `MAX_POSITION_USD`. For limit orders, `price` is `order.limit_price`; for market orders
+(no `limit_price`), it uses the last-traded price injected via the `last_prices` dict (populated
+from the most recent `Bar` seen for that symbol) so USD exposure is still computed correctly.
+Only if truly no price is available yet does it fall back to comparing raw share count against
+`MAX_ORDER_SIZE`.
 
 `DrawdownCheck` uses `portfolio` values set by `RiskEngine.update_position(symbol, usd_value)`.
 An empty portfolio always passes (no recorded drawdown).
@@ -152,12 +179,25 @@ strings. Raw DDL is also in `db/init/01_bars.sql` for fresh container initialisa
 ## Dashboard
 
 FastAPI app runs in the **same asyncio event loop** as the trading engine via `asyncio.gather`.
-- `GET /` — candlestick chart (TradingView Lightweight Charts), orders table, positions, metrics
+The UI is a customizable GridStack workspace, not a fixed layout: the "+ Add View" menu spawns
+any number of Chart / Metrics / Trade History / Holdings / Compare widgets, each independently
+configured (symbol, timeframe, indicators) and independently draggable/resizable. The full
+workspace (widget types, configs, grid positions) persists to `localStorage`
+(`hedge-dashboard-layout`); corrupt or missing state falls back to a "Trading" starting template.
+A reserved sentinel symbol `PORTFOLIO_SYMBOL` (`'__PORTFOLIO__'`, exported from `state.js`) lets a
+Chart widget render total portfolio value as a line instead of OHLC candles.
+
+- `GET /` — dashboard shell (see `templates/index.html` in the module map)
 - `GET /api/snapshot` — full JSON snapshot of current state
-- `WS /ws` — streams `bar`, `order`, `position`, and `snapshot` messages to all clients
+- `GET /api/portfolio/history` — chronological `portfolio_value` rows for the portfolio chart mode
+- `WS /ws` — streams `bar`, `order`, `position`, `portfolio`, `portfolio_value`, and `snapshot`
+  messages; `src/dashboard/static/js/ws.js` fans each type out to every relevant widget instance
+  via `widgets.js`'s `dispatch*` functions (not global `window.__*` callbacks)
 
 `DashboardState` is a module-level singleton (`get_state()`). Feed callbacks call
-`await get_state().add_bar(bar)` which broadcasts to all connected WebSocket clients.
+`await get_state().add_bar(bar)` which broadcasts to all connected WebSocket clients;
+`main.py`'s `_portfolio_poll_loop` (10s) does the same for `portfolio`/`portfolio_value`, also
+persisting each portfolio snapshot via `TimeseriesStore.insert_portfolio_snapshot()`.
 
 ## Adding a strategy
 
@@ -165,7 +205,8 @@ FastAPI app runs in the **same asyncio event loop** as the trading engine via `a
 2. Implement `id` property and `async on_bar(bar)`.
 3. In `main.py`, instantiate and pass to `registry.register(MyStrategy(broker, risk))`.
 
-See `src/strategies/noop_strategy.py` for the minimal template.
+See `src/strategies/noop_strategy.py` for the minimal template, or
+`src/strategies/sma_crossover.py` for the current live (dry-run by default) strategy.
 
 ## Market data source
 
@@ -180,10 +221,13 @@ IB's API requires a subscription even for delayed data (Error 10089 otherwise).
 ## Testing
 
 ```bash
-python -m uv run pytest              # run all tests (30 tests)
+python -m uv run pytest              # run all tests (47 tests)
 python -m uv run pytest -x -q        # fail fast, quiet
 python -m uv run mypy src/ main.py   # type check (strict)
 python -m uv run ruff check src/ main.py tests/   # lint
 ```
 
 Tests live in `tests/`, mirroring `src/` layout. Uses `pytest-asyncio` (`asyncio_mode = "auto"`).
+No JS test harness exists for `src/dashboard/static/js/`; validate with
+`node --input-type=module --check < file.js` and a manual browser pass — there is no automated
+frontend suite to run instead.
