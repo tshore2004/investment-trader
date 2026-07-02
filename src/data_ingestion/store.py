@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy import text
@@ -88,6 +89,36 @@ ORDER BY timestamp ASC
 """
 
 
+_CREATE_PORTFOLIO_TABLE = """
+CREATE TABLE IF NOT EXISTS portfolio_value (
+    timestamp   TIMESTAMPTZ NOT NULL,
+    value       FLOAT8      NOT NULL,
+    PRIMARY KEY (timestamp)
+)
+"""
+
+_CREATE_PORTFOLIO_HYPERTABLE = (
+    "SELECT create_hypertable('portfolio_value', 'timestamp'::name, if_not_exists => TRUE)"
+)
+
+_INSERT_PORTFOLIO_SNAPSHOT = (
+    "INSERT INTO portfolio_value (timestamp, value) "
+    "VALUES (:timestamp, :value) "
+    "ON CONFLICT DO NOTHING"
+)
+
+_SELECT_PORTFOLIO_HISTORY = """
+SELECT timestamp, value
+FROM (
+    SELECT timestamp, value
+    FROM portfolio_value
+    ORDER BY timestamp DESC
+    LIMIT :limit
+) recent
+ORDER BY timestamp ASC
+"""
+
+
 class TimeseriesStore:
     def __init__(self) -> None:
         self._settings = get_settings()
@@ -103,6 +134,10 @@ class TimeseriesStore:
             await conn.execute(text(_CREATE_HYPERTABLE))
         async with self._engine.begin() as conn:
             await conn.execute(text(_CREATE_ORDERS_TABLE))
+        async with self._engine.begin() as conn:
+            await conn.execute(text(_CREATE_PORTFOLIO_TABLE))
+        async with self._engine.begin() as conn:
+            await conn.execute(text(_CREATE_PORTFOLIO_HYPERTABLE))
         log.info("timescaledb_connected")
 
     async def close(self) -> None:
@@ -158,5 +193,21 @@ class TimeseriesStore:
         async with self._engine.begin() as conn:
             result = await conn.execute(
                 text(_SELECT_BARS_BY_SYMBOL), {"symbol": symbol, "limit": limit}
+            )
+            return [dict(row._mapping) for row in result]
+
+    async def insert_portfolio_snapshot(self, value: float, timestamp: datetime) -> None:
+        assert self._engine, "call connect() first"
+        async with self._engine.begin() as conn:
+            await conn.execute(
+                text(_INSERT_PORTFOLIO_SNAPSHOT),
+                {"timestamp": timestamp, "value": value},
+            )
+
+    async def get_portfolio_history(self, limit: int = 5000) -> list[dict[str, Any]]:
+        assert self._engine, "call connect() first"
+        async with self._engine.begin() as conn:
+            result = await conn.execute(
+                text(_SELECT_PORTFOLIO_HISTORY), {"limit": limit}
             )
             return [dict(row._mapping) for row in result]
