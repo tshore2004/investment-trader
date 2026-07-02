@@ -85,6 +85,14 @@
   #sym-btn:hover { background:#ffd83d; }
   #search-status { font-size:11px; color:#a39c8f; }
   #no-data { color: #a39c8f; padding: 20px; text-align: center; font-size: 12px; }
+  .grid-stack-item-content { position: relative; }
+  .w-remove { position: absolute; top: 4px; right: 4px; z-index: 15; background: transparent; border: none; color: #6b6b6b; font-size: 14px; font-weight: 700; cursor: pointer; line-height: 1; padding: 2px 6px; font-family: inherit; }
+  .w-remove:hover { color: #f85149; }
+  #add-view-wrap { position: relative; }
+  #add-view-btn { background: #1a1a1a; border: 1px solid #F5C518; color: #F5C518; padding: 5px 12px; border-radius: 6px; cursor: pointer; font-size: 12px; font-family: inherit; font-weight: 700; }
+  #add-view-btn:hover { background: #262626; }
+  #add-view-menu { position: absolute; top: calc(100% + 4px); left: 0; background: #121212; border: 1px solid #262626; border-radius: 6px; z-index: 30; display: flex; flex-direction: column; min-width: 130px; overflow: hidden; }
+  #add-view-menu.hidden { display: none; }
 </style>
 </head>
 <body>
@@ -93,6 +101,10 @@
   <span id="conn-badge" class="badge disconnected">CONNECTING</span>
   <span id="mode-badge" class="badge dryrun">DRY RUN</span>
   <span id="last-ts" style="color:#a39c8f;font-size:11px;margin-left:auto"></span>
+  <div id="add-view-wrap">
+    <button id="add-view-btn">+ Add View</button>
+    <div id="add-view-menu" class="hidden"></div>
+  </div>
   <select id="layout-preset" style="background:#1a1a1a;border:1px solid #333;color:#eaeaea;padding:5px 8px;border-radius:6px;font-family:inherit;font-size:12px">
     <option value="trading">Trading</option>
     <option value="compare">Compare</option>
@@ -105,102 +117,8 @@
   </div>
 </header>
 
-<div class="grid-stack">
-  <div class="grid-stack-item" gs-id="w-chart" gs-x="0" gs-y="0" gs-w="8" gs-h="8">
-    <div class="grid-stack-item-content">
-      <div class="panel">
-        <div class="panel-header">
-          <div style="display:flex;gap:12px;align-items:center">
-            <div class="tf-dropdown" id="tf-dropdown">
-              <button class="tf-toggle-btn" id="tf-toggle">&#9776; <span id="tf-current">1m</span></button>
-              <div class="tf-menu hidden" id="tf-menu">
-                <button class="tf-option active" data-tf="60">1m</button>
-                <button class="tf-option" data-tf="300">5m</button>
-                <button class="tf-option" data-tf="600">10m</button>
-                <button class="tf-option" data-tf="1800">30m</button>
-                <button class="tf-option" data-tf="3600">1h</button>
-                <button class="tf-option" data-tf="14400">4h</button>
-                <button class="tf-option" data-tf="86400">1d</button>
-              </div>
-            </div>
-            <span id="chart-label">1m Bars (delayed)</span>
-            <div class="tf-dropdown" id="ind-dropdown">
-              <button class="tf-toggle-btn" id="ind-toggle">&#8801; Indicators</button>
-              <div class="tf-menu hidden" id="ind-menu">
-                <button class="tf-option" data-ind="SMA20">SMA(20)</button>
-                <button class="tf-option" data-ind="EMA9">EMA(9)</button>
-                <button class="tf-option" data-ind="VWAP">VWAP</button>
-                <button class="tf-option" data-ind="RSI14">RSI(14)</button>
-              </div>
-            </div>
-          </div>
-          <div style="display:flex;gap:16px;align-items:center">
-            <div id="mode-toggle">
-              <button class="sym-tab active" data-mode="chart">Chart</button>
-              <button class="sym-tab" data-mode="compare">Compare</button>
-            </div>
-            <div id="symbol-tabs"></div>
-          </div>
-        </div>
-        <div id="compare-panel" style="display:none;overflow:auto;flex:1 1 auto"></div>
-        <div id="chart"></div>
-      </div>
-    </div>
-  </div>
-
-  <div class="grid-stack-item" gs-id="w-metrics" gs-x="8" gs-y="0" gs-w="4" gs-h="3">
-    <div class="grid-stack-item-content">
-      <div class="metrics" style="height:100%">
-        <div class="metric">
-          <div class="metric-label">Last Price</div>
-          <div class="metric-value" id="m-close">—</div>
-        </div>
-        <div class="metric">
-          <div class="metric-label">Volume</div>
-          <div class="metric-value" id="m-vol">—</div>
-        </div>
-        <div class="metric">
-          <div class="metric-label">Position (USD)</div>
-          <div class="metric-value" id="m-pos">—</div>
-        </div>
-        <div class="metric">
-          <div class="metric-label">Bar Count</div>
-          <div class="metric-value" id="m-bars">0</div>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <div class="grid-stack-item" gs-id="w-orders" gs-x="8" gs-y="3" gs-w="4" gs-h="3">
-    <div class="grid-stack-item-content">
-      <div class="right-panel" style="height:100%">
-        <div class="panel-header"><span id="orders-header-label">Trade History</span></div>
-        <table id="orders-table">
-          <thead><tr><th>Time</th><th>Side</th><th>Qty</th><th>Status</th></tr></thead>
-          <tbody id="orders-body"></tbody>
-        </table>
-        <div id="no-orders" style="color:#a39c8f;padding:20px;text-align:center;font-size:12px">No orders yet</div>
-      </div>
-    </div>
-  </div>
-
-  <div class="grid-stack-item" gs-id="w-holdings" gs-x="8" gs-y="6" gs-w="4" gs-h="2">
-    <div class="grid-stack-item-content">
-      <div class="right-panel" style="height:100%">
-        <div class="panel-header">Holdings</div>
-        <table id="holdings-table">
-          <thead>
-            <tr>
-              <th>Symbol</th><th>Qty</th><th>Avg Cost</th><th>Live Price</th><th>P&amp;L $</th><th>P&amp;L %</th>
-            </tr>
-          </thead>
-          <tbody id="holdings-body"></tbody>
-        </table>
-        <div id="no-holdings" style="color:#a39c8f;padding:12px;text-align:center;font-size:12px">No holdings</div>
-      </div>
-    </div>
-  </div>
-</div>
+<!-- Widgets are created dynamically by layout.js/widgets.js — the grid starts empty. -->
+<div class="grid-stack"></div>
 
 <script type="module" src="/static/js/main.js"></script>
 </body>

@@ -1,5 +1,5 @@
-import { state, resampleBars, colorForCompareSymbol } from './state.js';
-import { candleSeries, volSeries, ensureTab, renderChart } from './chart.js';
+import { state, resampleBars, COMPARE_PALETTE } from './state.js';
+import { loadBarHistory } from './chart.js';
 
 function stdev(values) {
   const n = values.length;
@@ -75,120 +75,128 @@ function sparklineSVG(closes) {
   return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"><polyline points="${points}" fill="none" stroke="${up ? '#3fb950' : '#f85149'}" stroke-width="1.5" /></svg>`;
 }
 
-export function renderCompareMetrics() {
-  const panel = document.getElementById('compare-panel');
-  if (!panel) return;
+// Compare widget factory. config: { baseSymbol, compareSymbols: [] }
+// hooks: { onConfigChange() } for persistence.
+export function createCompareWidget(container, config, hooks = {}) {
+  config.compareSymbols = Array.isArray(config.compareSymbols) ? config.compareSymbols : [];
+  const colors = {};
 
-  const symbols = [];
-  if (state.activeSymbol) symbols.push(state.activeSymbol);
-  for (const s of state.compareSymbols) if (!symbols.includes(s)) symbols.push(s);
-
-  const activeRaw = state.activeSymbol ? (state.bars[state.activeSymbol] || []) : [];
-
-  const rowsHtml = symbols.map(sym => {
-    const raw = state.bars[sym] || [];
-    const displayed = resampleBars(raw, state.timeframeSeconds);
-    const last = raw[raw.length - 1];
-    const prev = raw.length > 1 ? raw[raw.length - 2].close : null;
-    const changePct = (last && prev) ? ((last.close - prev) / prev * 100) : null;
-    const volRatio = volVsAvg(displayed);
-    const closes = displayed.map(b => b.close);
-    const volatility = stdev(returnsFromCloses(closes));
-    let corr = sym === state.activeSymbol ? 1 : null;
-    if (corr === null && state.activeSymbol) {
-      const [a, b] = alignedReturnPairs(raw, activeRaw);
-      corr = pearsonCorrelation(a, b);
+  function colorFor(sym) {
+    if (!colors[sym]) {
+      const used = new Set(Object.values(colors));
+      colors[sym] = COMPARE_PALETTE.find(c => !used.has(c)) || COMPARE_PALETTE[config.compareSymbols.length % COMPARE_PALETTE.length];
     }
-    const removable = state.compareSymbols.includes(sym);
-    return `<tr>
-      <td>${sym}${removable ? ` <span class="legend-remove" data-remove="${sym}">&times;</span>` : ''}</td>
-      <td>${last ? '$' + last.close.toFixed(2) : '—'}</td>
-      <td class="${changePct !== null ? (changePct >= 0 ? 'pnl-green' : 'pnl-red') : ''}">${changePct !== null ? changePct.toFixed(2) + '%' : '—'}</td>
-      <td>${volRatio !== null ? volRatio.toFixed(2) + 'x' : '—'}</td>
-      <td>${volatility !== null ? (volatility * 100).toFixed(3) + '%' : '—'}</td>
-      <td>${corr !== null ? corr.toFixed(2) : '—'}</td>
-      <td>${sparklineSVG(closes.slice(-30))}</td>
-    </tr>`;
-  }).join('');
+    return colors[sym];
+  }
 
-  panel.innerHTML = `
-    <div id="compare-legend" style="display:flex">
-      ${state.compareSymbols.map(sym => `
-        <span class="legend-chip" data-sym="${sym}">
-          <span class="legend-dot" style="background:${colorForCompareSymbol(sym)}"></span>${sym}
-          <span class="legend-remove" data-remove="${sym}">&times;</span>
-        </span>`).join('')}
-      <input id="compare-add-input" class="legend-add-input" placeholder="+ Add symbol" maxlength="8" />
-    </div>
-    <table id="compare-table">
-      <thead><tr><th>Symbol</th><th>Last</th><th>Chg %</th><th>Vol/Avg</th><th>Volatility (stdev ret)</th><th>Corr</th><th>Trend</th></tr></thead>
-      <tbody>${rowsHtml || '<tr class="placeholder-row"><td colspan="7">No symbols in compare view</td></tr>'}</tbody>
-    </table>`;
+  container.innerHTML = `
+    <div class="right-panel" style="height:100%;display:flex;flex-direction:column">
+      <div class="panel-header">Compare — ${config.baseSymbol}</div>
+      <div class="w-compare-panel" style="overflow:auto;flex:1 1 auto"></div>
+    </div>`;
+  const panel = container.querySelector('.w-compare-panel');
 
-  panel.querySelectorAll('.legend-remove').forEach(x => {
-    x.onclick = () => removeCompareSymbol(x.dataset.remove);
-  });
-  const input = document.getElementById('compare-add-input');
-  if (input) {
-    input.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') {
-        const sym = input.value.toUpperCase().trim();
-        if (sym) addCompareSymbol(sym);
-        input.value = '';
+  function render() {
+    const symbols = [config.baseSymbol];
+    for (const s of config.compareSymbols) if (!symbols.includes(s)) symbols.push(s);
+
+    const baseRaw = state.bars[config.baseSymbol] || [];
+
+    const rowsHtml = symbols.map(sym => {
+      const raw = state.bars[sym] || [];
+      const displayed = resampleBars(raw, 60);
+      const last = raw[raw.length - 1];
+      const prev = raw.length > 1 ? raw[raw.length - 2].close : null;
+      const changePct = (last && prev) ? ((last.close - prev) / prev * 100) : null;
+      const volRatio = volVsAvg(displayed);
+      const closes = displayed.map(b => b.close);
+      const volatility = stdev(returnsFromCloses(closes));
+      let corr = sym === config.baseSymbol ? 1 : null;
+      if (corr === null) {
+        const [a, b] = alignedReturnPairs(raw, baseRaw);
+        corr = pearsonCorrelation(a, b);
       }
+      const removable = config.compareSymbols.includes(sym);
+      return `<tr>
+        <td>${sym}${removable ? ` <span class="legend-remove" data-remove="${sym}">&times;</span>` : ''}</td>
+        <td>${last ? '$' + last.close.toFixed(2) : '—'}</td>
+        <td class="${changePct !== null ? (changePct >= 0 ? 'pnl-green' : 'pnl-red') : ''}">${changePct !== null ? changePct.toFixed(2) + '%' : '—'}</td>
+        <td>${volRatio !== null ? volRatio.toFixed(2) + 'x' : '—'}</td>
+        <td>${volatility !== null ? (volatility * 100).toFixed(3) + '%' : '—'}</td>
+        <td>${corr !== null ? corr.toFixed(2) : '—'}</td>
+        <td>${sparklineSVG(closes.slice(-30))}</td>
+      </tr>`;
+    }).join('');
+
+    panel.innerHTML = `
+      <div class="w-compare-legend" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:8px 16px;border-bottom:1px solid #262626">
+        ${config.compareSymbols.map(sym => `
+          <span class="legend-chip" data-sym="${sym}">
+            <span class="legend-dot" style="background:${colorFor(sym)}"></span>${sym}
+            <span class="legend-remove" data-remove="${sym}">&times;</span>
+          </span>`).join('')}
+        <input class="legend-add-input w-compare-add" placeholder="+ Add symbol" maxlength="8" />
+      </div>
+      <table>
+        <thead><tr><th>Symbol</th><th>Last</th><th>Chg %</th><th>Vol/Avg</th><th>Volatility (stdev ret)</th><th>Corr</th><th>Trend</th></tr></thead>
+        <tbody>${rowsHtml || '<tr class="placeholder-row"><td colspan="7">No symbols in compare view</td></tr>'}</tbody>
+      </table>`;
+
+    panel.querySelectorAll('.legend-remove').forEach(x => {
+      x.onclick = () => removeSymbol(x.dataset.remove);
     });
+    const input = panel.querySelector('.w-compare-add');
+    if (input) {
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          const sym = input.value.toUpperCase().trim();
+          if (sym) addSymbol(sym);
+          input.value = '';
+        }
+      });
+    }
   }
-}
 
-export async function addCompareSymbol(sym) {
-  sym = sym.toUpperCase().trim();
-  if (!sym || state.compareSymbols.includes(sym)) return;
-  state.compareSymbols.push(sym);
-  colorForCompareSymbol(sym);
-  ensureTab(sym);
-  try {
-    await fetch('/api/subscribe/' + sym, { method: 'POST' });
-  } catch (e) {
-    // best effort — table shows "—" until data arrives
-  }
-  if (!state.bars[sym] || state.bars[sym].length === 0) {
+  async function addSymbol(sym) {
+    sym = sym.toUpperCase().trim();
+    if (!sym || config.compareSymbols.includes(sym)) return;
+    config.compareSymbols.push(sym);
+    colorFor(sym);
     try {
-      const r = await fetch('/api/bars/' + encodeURIComponent(sym));
-      const rows = await r.json();
-      state.bars[sym] = rows.map(row => ({
-        time: Math.floor(new Date(row.timestamp).getTime() / 1000),
-        open: row.open, high: row.high, low: row.low, close: row.close, volume: row.volume,
-      }));
+      await fetch('/api/subscribe/' + encodeURIComponent(sym), { method: 'POST' });
     } catch (e) {
-      // keep whatever we have
+      // best effort — table shows "—" until data arrives
     }
-  }
-  renderCompareMetrics();
-}
-
-export function removeCompareSymbol(sym) {
-  state.compareSymbols = state.compareSymbols.filter(s => s !== sym);
-  renderCompareMetrics();
-}
-
-export function setMode(mode) {
-  state.mode = mode;
-  const isCompare = mode === 'compare';
-  document.querySelectorAll('#mode-toggle .sym-tab').forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
-  document.getElementById('symbol-tabs').style.display = isCompare ? 'none' : 'flex';
-  document.getElementById('compare-panel').style.display = isCompare ? 'block' : 'none';
-  document.getElementById('chart').style.display = isCompare ? 'none' : 'block';
-  candleSeries.applyOptions({ visible: !isCompare });
-  volSeries.applyOptions({ visible: !isCompare });
-  if (isCompare) {
-    if (state.compareSymbols.length === 0 && state.activeSymbol) {
-      addCompareSymbol(state.activeSymbol);
-    } else {
-      renderCompareMetrics();
+    if (!state.bars[sym] || state.bars[sym].length === 0) {
+      await loadBarHistory(sym);
     }
-  } else {
-    renderChart();
+    render();
+    if (hooks.onConfigChange) hooks.onConfigChange();
   }
-}
 
-window.__renderCompareMetrics = renderCompareMetrics;
+  function removeSymbol(sym) {
+    config.compareSymbols = config.compareSymbols.filter(s => s !== sym);
+    render();
+    if (hooks.onConfigChange) hooks.onConfigChange();
+  }
+
+  // Make sure every configured symbol has data on startup.
+  (async () => {
+    for (const sym of [config.baseSymbol, ...config.compareSymbols]) {
+      if (!state.bars[sym] || state.bars[sym].length === 0) {
+        try { await fetch('/api/subscribe/' + encodeURIComponent(sym), { method: 'POST' }); } catch (e) { /* best effort */ }
+        await loadBarHistory(sym);
+      }
+    }
+    render();
+  })();
+
+  return {
+    update(sym) {
+      if (sym === config.baseSymbol || config.compareSymbols.includes(sym)) render();
+    },
+    render,
+    getConfig() { return { baseSymbol: config.baseSymbol, compareSymbols: [...config.compareSymbols] }; },
+    destroy() {},
+  };
+}
