@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 import numpy as np
+import pytest
 
 from src.ml.trainer import Trainer
 
@@ -66,3 +67,35 @@ async def test_trainer_stop_halts_before_all_epochs() -> None:
     assert result.stopped_early is True
     assert result.epochs_completed == 2
     assert seen_epochs == [1, 2]
+
+
+async def test_trainer_stop_on_last_epoch_is_not_stopped_early() -> None:
+    X, y = _synthetic_dataset()
+    trainer = Trainer()
+    seen_epochs: list[int] = []
+
+    async def on_progress(payload: dict[str, Any]) -> None:
+        seen_epochs.append(payload["epoch"])
+        if payload["epoch"] == 3:
+            trainer.stop()
+
+    result = await trainer.run(
+        symbol="TEST", X=X, y=y, epochs=3, lr=0.01, hidden_size=8, on_progress=on_progress
+    )
+
+    assert result.stopped_early is False
+    assert result.epochs_completed == 3
+    assert seen_epochs == [1, 2, 3]
+
+
+async def test_trainer_raises_for_degenerate_split() -> None:
+    X, y = _synthetic_dataset(n=1)
+
+    async def on_progress(payload: dict[str, Any]) -> None:
+        pass
+
+    trainer = Trainer()
+    with pytest.raises(ValueError, match="not enough samples"):
+        await trainer.run(
+            symbol="TEST", X=X, y=y, epochs=5, lr=0.01, hidden_size=8, on_progress=on_progress
+        )

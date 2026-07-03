@@ -40,6 +40,10 @@ class Trainer:
     ) -> TrainingResult:
         self._stop_requested = False
         split = int(len(X) * 0.8)
+        if split <= 0 or split >= len(X):
+            raise ValueError(
+                f"not enough samples for an 80/20 train/val split: got {len(X)} rows"
+            )
         X_train, X_val = X[:split], X[split:]
         y_train, y_val = y[:split], y[split:]
         ts_val = timestamps[split:] if timestamps is not None else list(range(len(X_val)))
@@ -102,5 +106,6 @@ class Trainer:
             )
 
         return TrainingResult(
-            epochs_completed=epochs_completed, stopped_early=self._stop_requested
+            epochs_completed=epochs_completed,
+            stopped_early=epochs_completed < epochs,
         )
