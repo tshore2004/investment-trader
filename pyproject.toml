@@ -21,6 +21,7 @@ dependencies = [
     "fastapi>=0.111",
     "uvicorn[standard]>=0.29",
     "yfinance>=1.5.1",
+    "torch>=2.12.1",
 ]
 
 [project.optional-dependencies]
