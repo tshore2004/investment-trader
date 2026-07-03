@@ -9,10 +9,13 @@ from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Any
 
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 from src.data_ingestion.feed import Bar
+from src.ml.service import train_symbol
+from src.ml.trainer import Trainer
 from src.utils import get_logger
 
 if TYPE_CHECKING:
@@ -70,6 +73,9 @@ class DashboardState:
             {"type": "portfolio_value", "value": value, "timestamp": timestamp}
         )
 
+    async def broadcast_ml_training(self, symbol: str, payload: dict[str, Any]) -> None:
+        await self._broadcast({"type": "ml_training", "symbol": symbol, **payload})
+
     def snapshot(self) -> dict[str, Any]:
         return {"type": "snapshot",
                 "bars": {s: list(b) for s, b in self.bars.items()},
@@ -104,6 +110,18 @@ _state = DashboardState()
 _feed: MarketDataFeed | None = None
 _broker: IBBroker | None = None
 _store: TimeseriesStore | None = None
+_active_trainers: dict[str, Trainer] = {}
+
+
+class TrainRequest(BaseModel):
+    symbol: str
+    epochs: int = 50
+    lr: float = 0.001
+    hidden_size: int = 64
+
+
+class StopRequest(BaseModel):
+    symbol: str
 
 
 def get_state() -> DashboardState:
@@ -175,6 +193,52 @@ def create_app() -> FastAPI:
             return {"status": "error", "symbol": sym, "detail": "feed not ready"}
         await _feed.subscribe(sym)
         return {"status": "subscribed", "symbol": sym}
+
+    @app.post("/api/ml/train")
+    async def start_ml_training(req: TrainRequest) -> JSONResponse:
+        sym = req.symbol.upper().strip()
+        if sym in _active_trainers:
+            return JSONResponse(
+                status_code=409, content={"status": "already_training", "symbol": sym}
+            )
+        if _store is None:
+            return JSONResponse(
+                status_code=503, content={"status": "error", "detail": "store not ready"}
+            )
+
+        trainer = Trainer()
+        _active_trainers[sym] = trainer
+
+        async def on_progress(payload: dict[str, Any]) -> None:
+            await _state.broadcast_ml_training(sym, payload)
+
+        async def _run() -> None:
+            try:
+                await train_symbol(
+                    store=_store,
+                    symbol=sym,
+                    epochs=req.epochs,
+                    lr=req.lr,
+                    hidden_size=req.hidden_size,
+                    on_progress=on_progress,
+                    trainer=trainer,
+                )
+            except Exception:
+                log.exception("ml_training_failed", symbol=sym)
+            finally:
+                _active_trainers.pop(sym, None)
+
+        asyncio.create_task(_run())
+        return JSONResponse(status_code=202, content={"status": "started", "symbol": sym})
+
+    @app.post("/api/ml/stop")
+    async def stop_ml_training(req: StopRequest) -> dict[str, str]:
+        sym = req.symbol.upper().strip()
+        trainer = _active_trainers.get(sym)
+        if trainer is None:
+            return {"status": "not_training", "symbol": sym}
+        trainer.stop()
+        return {"status": "stopping", "symbol": sym}
 
     @app.websocket("/ws")
     async def websocket_endpoint(ws: WebSocket) -> None:
