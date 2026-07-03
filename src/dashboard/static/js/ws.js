@@ -1,7 +1,7 @@
 import { state } from './state.js';
 import {
   dispatchBar, dispatchPortfolioValue, dispatchOrder,
-  dispatchHoldings, dispatchPosition,
+  dispatchHoldings, dispatchPosition, dispatchMlTraining,
 } from './widgets.js';
 
 export function setModeBadge(enabled) {
@@ -57,6 +57,8 @@ function handleMessage(msg) {
       time: Math.floor(new Date(msg.timestamp).getTime() / 1000),
       value: msg.value,
     });
+  } else if (msg.type === 'ml_training') {
+    dispatchMlTraining(msg);
   }
 }
 

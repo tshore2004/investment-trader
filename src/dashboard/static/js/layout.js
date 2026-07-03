@@ -120,6 +120,9 @@ function restoreWorkspace() {
       indicators: w.indicators,
       baseSymbol: w.baseSymbol,
       compareSymbols: w.compareSymbols,
+      epochs: w.epochs,
+      lr: w.lr,
+      hiddenSize: w.hiddenSize,
     };
     if (addWidgetInstance(w.type, config, { id: w.id, x: w.x, y: w.y, w: w.w, h: w.h })) {
       restoredAny = true;
