@@ -53,6 +53,12 @@ export function createMlWidget(container, config) {
   function handleProgress(msg) {
     if (msg.symbol !== config.symbol) return;
 
+    if (msg.status === 'error') {
+      statusEl.textContent = `error: ${msg.detail}`;
+      return;
+    }
+    if (msg.epoch === undefined) return;
+
     lossPoints.push({ time: msg.epoch, trainLoss: msg.train_loss, valLoss: msg.val_loss });
     trainLossSeries.setData(lossPoints.map(p => ({ time: p.time, value: p.trainLoss })));
     valLossSeries.setData(lossPoints.map(p => ({ time: p.time, value: p.valLoss })));

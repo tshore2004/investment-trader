@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from src.data_ingestion.feed import Bar
 from src.ml.service import train_symbol
@@ -115,9 +115,9 @@ _active_trainers: dict[str, Trainer] = {}
 
 class TrainRequest(BaseModel):
     symbol: str
-    epochs: int = 50
+    epochs: int = Field(default=50, ge=1, le=1000)
     lr: float = 0.001
-    hidden_size: int = 64
+    hidden_size: int = Field(default=64, ge=2, le=2048)
 
 
 class StopRequest(BaseModel):
@@ -223,8 +223,9 @@ def create_app() -> FastAPI:
                     on_progress=on_progress,
                     trainer=trainer,
                 )
-            except Exception:
+            except Exception as exc:
                 log.exception("ml_training_failed", symbol=sym)
+                await _state.broadcast_ml_training(sym, {"status": "error", "detail": str(exc)})
             finally:
                 _active_trainers.pop(sym, None)
 

@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import pytest
+
 from src.ml.service import train_symbol
 from src.ml.trainer import TrainingResult
 
@@ -45,3 +47,15 @@ async def test_train_symbol_runs_end_to_end() -> None:
     assert isinstance(result, TrainingResult)
     assert result.epochs_completed == 2
     assert len(progress) == 2
+
+
+async def test_train_symbol_raises_clear_error_on_empty_bars() -> None:
+    store = FakeStore([])
+
+    async def on_progress(payload: dict[str, Any]) -> None:
+        pass
+
+    with pytest.raises(ValueError, match="no bars available for 'TEST'"):
+        await train_symbol(
+            store=store, symbol="TEST", epochs=2, lr=0.01, hidden_size=8, on_progress=on_progress
+        )

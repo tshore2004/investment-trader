@@ -16,6 +16,8 @@ async def train_symbol(
     trainer: Trainer | None = None,
 ) -> TrainingResult:
     bars = await store.get_bars(symbol, limit=100_000)
+    if not bars:
+        raise ValueError(f"no bars available for {symbol!r} — run the backfill script first")
     df = compute_indicators(bars)
     X, y, timestamps = build_windows(df)
     active_trainer = trainer if trainer is not None else Trainer()

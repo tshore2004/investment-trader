@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from fastapi.testclient import TestClient
@@ -60,6 +61,58 @@ def test_stop_training_is_noop_when_not_running() -> None:
 
     assert resp.status_code == 200
     assert resp.json()["status"] == "not_training"
+
+
+def test_start_training_broadcasts_error_on_failure(monkeypatch: Any) -> None:
+    monkeypatch.setattr(app_module, "_store", FakeStore())
+
+    async def _failing_train_symbol(**kwargs: Any) -> TrainingResult:
+        raise ValueError("no bars available for 'AAPL' — run the backfill script first")
+
+    monkeypatch.setattr(app_module, "train_symbol", _failing_train_symbol)
+
+    broadcasts: list[tuple[str, dict[str, Any]]] = []
+    original_broadcast = app_module._state.broadcast_ml_training
+
+    async def _capturing_broadcast(symbol: str, payload: dict[str, Any]) -> None:
+        broadcasts.append((symbol, payload))
+        await original_broadcast(symbol, payload)
+
+    monkeypatch.setattr(app_module._state, "broadcast_ml_training", _capturing_broadcast)
+
+    client = TestClient(create_app())
+    resp = client.post("/api/ml/train", json={"symbol": "AAPL"})
+    assert resp.status_code == 202
+
+    for _ in range(100):
+        if broadcasts:
+            break
+        time.sleep(0.02)
+
+    assert broadcasts, "expected broadcast_ml_training to be called on failure"
+    symbol, payload = broadcasts[0]
+    assert symbol == "AAPL"
+    assert payload["status"] == "error"
+    assert "no bars available" in payload["detail"]
+    assert "AAPL" not in app_module._active_trainers
+
+
+def test_start_training_rejects_out_of_bounds_hidden_size(monkeypatch: Any) -> None:
+    monkeypatch.setattr(app_module, "_store", FakeStore())
+    client = TestClient(create_app())
+
+    resp = client.post("/api/ml/train", json={"symbol": "AAPL", "hidden_size": 999999999})
+
+    assert resp.status_code == 422
+
+
+def test_start_training_rejects_out_of_bounds_epochs(monkeypatch: Any) -> None:
+    monkeypatch.setattr(app_module, "_store", FakeStore())
+    client = TestClient(create_app())
+
+    resp = client.post("/api/ml/train", json={"symbol": "AAPL", "epochs": 0})
+
+    assert resp.status_code == 422
 
 
 def test_stop_training_calls_trainer_stop() -> None:
