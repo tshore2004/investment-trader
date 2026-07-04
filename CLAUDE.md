@@ -85,11 +85,27 @@ src/
 │   ├── sma_crossover.py   — SmaCrossoverStrategy: fast/slow SMA crossover, one position per
 │   │                        symbol, respects TRADING_ENABLED (dry-run logs) and MAX_TRADES_PER_DAY
 │   └── registry.py        — StrategyRegistry: register/unregister, dispatches Bar to all
+├── screener/
+│   ├── universe.py        — load_universe(name) -> list[str]; "sp500"/"broad" ticker lists
+│   │                        loaded from data/*.txt by filesystem path (not package import)
+│   ├── data.py             — fetch_universe_bars(universe_name, symbols, cache_dir=None) -> dict[str,
+│   │                        pd.DataFrame]; always includes "SPY"; parquet cache under .cache/screener/
+│   ├── data/               — sp500.txt / broad_market.txt ticker lists (namespace-package dir;
+│   │                        data.py module file wins for `import src.screener.data`, coexistence
+│   │                        verified safe)
+│   ├── metrics.py          — compute_metrics(bars_by_symbol, spy_df) -> pd.DataFrame: momentum/
+│   │                        rel_strength (1m/3m/6m/12m), rsi14, rel_volume, volatility, trend_quality
+│   ├── scorer.py           — score(metrics_df, weights=None) -> pd.DataFrame: percentile-rank
+│   │                        weighted composite `score` column, sorted descending
+│   └── service.py          — run_screen(universe, weights=None, on_progress=None) -> pd.DataFrame:
+│                              orchestrates universe → data → metrics → scorer with progress callbacks
 └── utils/
     ├── config.py          — Settings (pydantic-settings, extra="ignore"), cached via lru_cache
     └── logging.py         — structlog setup (json or console renderer)
 main.py                    — Entry point: shared IB instance, wires all components, runs gather,
                               _portfolio_poll_loop (10s: snapshot → store → WS broadcast)
+scripts/run_screener.py    — Standalone screener CLI: --universe {sp500,broad} --weights <json>
+                              --top <n>; writes full ranked results to CSV, prints top N to stdout
 ```
 
 ## Data flow
@@ -190,9 +206,14 @@ Chart widget render total portfolio value as a line instead of OHLC candles.
 - `GET /` — dashboard shell (see `templates/index.html` in the module map)
 - `GET /api/snapshot` — full JSON snapshot of current state
 - `GET /api/portfolio/history` — chronological `portfolio_value` rows for the portfolio chart mode
-- `WS /ws` — streams `bar`, `order`, `position`, `portfolio`, `portfolio_value`, and `snapshot`
-  messages; `src/dashboard/static/js/ws.js` fans each type out to every relevant widget instance
-  via `widgets.js`'s `dispatch*` functions (not global `window.__*` callbacks)
+- `WS /ws` — streams `bar`, `order`, `position`, `portfolio`, `portfolio_value`, `snapshot`, and
+  `screener_result` messages; `src/dashboard/static/js/ws.js` fans each type out to every relevant
+  widget instance via `widgets.js`'s `dispatch*` functions (not global `window.__*` callbacks)
+- `POST /api/screener/run` — starts a background screen (`src/screener/service.py`'s `run_screen`
+  via `asyncio.to_thread`); 409 if one is already running; progress/results broadcast as
+  `screener_result` WS messages (`stage` in `universe_loaded`/`data_fetched`/`metrics_computed`/`done`/`error`)
+- `POST /api/screener/stop` — `{"status": "stopping"}` (suppresses further progress broadcasts only
+  — `run_screen` has no per-item checkpoint to actually interrupt) or `{"status": "not_running"}`
 
 `DashboardState` is a module-level singleton (`get_state()`). Feed callbacks call
 `await get_state().add_bar(bar)` which broadcasts to all connected WebSocket clients;
