@@ -22,6 +22,7 @@ dependencies = [
     "uvicorn[standard]>=0.29",
     "yfinance>=1.5.1",
     "torch>=2.12.1",
+    "pyarrow>=24.0.0",
 ]
 
 [project.optional-dependencies]
