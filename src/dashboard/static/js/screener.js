@@ -48,6 +48,9 @@ export function createScreenerWidget(container, config) {
   function render() {
     const sorted = [...rows].sort((a, b) => {
       const av = a[sortCol] ?? 0, bv = b[sortCol] ?? 0;
+      if (sortCol === 'symbol') {
+        return sortAsc ? String(av).localeCompare(String(bv)) : String(bv).localeCompare(String(av));
+      }
       return sortAsc ? av - bv : bv - av;
     });
     tbody.innerHTML = sorted.map(r => `
