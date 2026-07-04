@@ -1479,7 +1479,10 @@ with the reviewer whether an equally explicit guard is warranted there too.
 - Consumes: `run_screen`, `ScreenProgress` from `src.screener.service` (Task 5).
 - Produces: `POST /api/screener/run` (body `{"universe": str, "weights": dict[str, float] |
   None}`) → `202 {"status": "started"}` or `409 {"status": "already_running"}` if one is already in
-  flight. `POST /api/screener/stop` → `{"status": "stopped"}` or `{"status": "not_running"}`.
+  flight. `POST /api/screener/stop` → `{"status": "stopping"}` (broadcast-suppression only —
+  `run_screen` has no per-item checkpoint to actually interrupt, unlike the NN-trainer's per-epoch
+  `Trainer.stop()`; "stopping" reflects this honestly, confirmed with the user during Task 6's
+  review) or `{"status": "not_running"}`.
   `DashboardState.broadcast_screener_result(payload: dict[str, Any]) -> None` (async), broadcasts
   `{"type": "screener_result", **payload}`.
 
