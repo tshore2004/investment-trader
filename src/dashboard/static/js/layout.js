@@ -123,6 +123,7 @@ function restoreWorkspace() {
       epochs: w.epochs,
       lr: w.lr,
       hiddenSize: w.hiddenSize,
+      universe: w.universe,
     };
     if (addWidgetInstance(w.type, config, { id: w.id, x: w.x, y: w.y, w: w.w, h: w.h })) {
       restoredAny = true;
