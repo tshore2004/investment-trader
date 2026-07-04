@@ -74,3 +74,22 @@ def test_run_screen_raises_clear_error_when_spy_benchmark_missing(monkeypatch: A
 
     with pytest.raises(RuntimeError, match="SPY benchmark data unavailable"):
         run_screen("sp500")
+
+
+def test_run_screen_raises_clear_error_when_no_symbols_have_sufficient_history(
+    monkeypatch: Any,
+) -> None:
+    monkeypatch.setattr(service_module, "load_universe", _fake_load_universe)
+
+    def _fetch_only_spy(
+        universe_name: str, symbols: list[str], cache_dir: Any = None
+    ) -> dict[str, pd.DataFrame]:
+        n = 300
+        closes = [100.0 + i * 0.1 for i in range(n)]
+        df = pd.DataFrame({"close": closes, "volume": [1_000_000] * n})
+        return {"SPY": df}
+
+    monkeypatch.setattr(service_module, "fetch_universe_bars", _fetch_only_spy)
+
+    with pytest.raises(RuntimeError, match="no symbols had sufficient history"):
+        run_screen("sp500")

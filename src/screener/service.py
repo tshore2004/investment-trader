@@ -41,6 +41,9 @@ def run_screen(
     metrics_df = compute_metrics(scannable, spy_df)
     _report("metrics_computed", f"{len(metrics_df)} symbols scored")
 
+    if metrics_df.empty:
+        raise RuntimeError("no symbols had sufficient history to screen")
+
     result = score(metrics_df, weights=weights)
     _report("done")
     return result
