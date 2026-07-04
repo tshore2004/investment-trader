@@ -9,10 +9,14 @@ from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Any
 
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
 
 from src.data_ingestion.feed import Bar
+from src.ml.service import train_symbol
+from src.ml.trainer import Trainer
+from src.screener.service import ScreenProgress, run_screen
 from src.utils import get_logger
 
 if TYPE_CHECKING:
@@ -70,6 +74,12 @@ class DashboardState:
             {"type": "portfolio_value", "value": value, "timestamp": timestamp}
         )
 
+    async def broadcast_ml_training(self, symbol: str, payload: dict[str, Any]) -> None:
+        await self._broadcast({"type": "ml_training", "symbol": symbol, **payload})
+
+    async def broadcast_screener_result(self, payload: dict[str, Any]) -> None:
+        await self._broadcast({"type": "screener_result", **payload})
+
     def snapshot(self) -> dict[str, Any]:
         return {"type": "snapshot",
                 "bars": {s: list(b) for s, b in self.bars.items()},
@@ -104,6 +114,30 @@ _state = DashboardState()
 _feed: MarketDataFeed | None = None
 _broker: IBBroker | None = None
 _store: TimeseriesStore | None = None
+_active_trainers: dict[str, Trainer] = {}
+_active_screen: dict[str, bool] = {"running": False}
+_screen_stop_requested = False
+_background_tasks: set[asyncio.Task[None]] = set()
+
+
+class TrainRequest(BaseModel):
+    symbol: str
+    epochs: int = Field(default=50, ge=1, le=1000)
+    lr: float = 0.001
+    hidden_size: int = Field(default=64, ge=2, le=2048)
+
+
+class StopRequest(BaseModel):
+    symbol: str
+
+
+class ScreenRequest(BaseModel):
+    universe: str
+    weights: dict[str, float] | None = None
+
+
+class ScreenStopRequest(BaseModel):
+    pass
 
 
 def get_state() -> DashboardState:
@@ -175,6 +209,101 @@ def create_app() -> FastAPI:
             return {"status": "error", "symbol": sym, "detail": "feed not ready"}
         await _feed.subscribe(sym)
         return {"status": "subscribed", "symbol": sym}
+
+    @app.post("/api/ml/train")
+    async def start_ml_training(req: TrainRequest) -> JSONResponse:
+        sym = req.symbol.upper().strip()
+        if sym in _active_trainers:
+            return JSONResponse(
+                status_code=409, content={"status": "already_training", "symbol": sym}
+            )
+        if _store is None:
+            return JSONResponse(
+                status_code=503, content={"status": "error", "detail": "store not ready"}
+            )
+
+        trainer = Trainer()
+        _active_trainers[sym] = trainer
+
+        async def on_progress(payload: dict[str, Any]) -> None:
+            await _state.broadcast_ml_training(sym, payload)
+
+        async def _run() -> None:
+            try:
+                await train_symbol(
+                    store=_store,
+                    symbol=sym,
+                    epochs=req.epochs,
+                    lr=req.lr,
+                    hidden_size=req.hidden_size,
+                    on_progress=on_progress,
+                    trainer=trainer,
+                )
+            except Exception as exc:
+                log.exception("ml_training_failed", symbol=sym)
+                await _state.broadcast_ml_training(sym, {"status": "error", "detail": str(exc)})
+            finally:
+                _active_trainers.pop(sym, None)
+
+        asyncio.create_task(_run())
+        return JSONResponse(status_code=202, content={"status": "started", "symbol": sym})
+
+    @app.post("/api/ml/stop")
+    async def stop_ml_training(req: StopRequest) -> dict[str, str]:
+        sym = req.symbol.upper().strip()
+        trainer = _active_trainers.get(sym)
+        if trainer is None:
+            return {"status": "not_training", "symbol": sym}
+        trainer.stop()
+        return {"status": "stopping", "symbol": sym}
+
+    @app.post("/api/screener/run")
+    async def start_screen(req: ScreenRequest) -> JSONResponse:
+        if _active_screen["running"]:
+            return JSONResponse(status_code=409, content={"status": "already_running"})
+
+        _active_screen["running"] = True
+        global _screen_stop_requested
+        _screen_stop_requested = False
+        loop = asyncio.get_running_loop()
+
+        def on_progress(progress: ScreenProgress) -> None:
+            if _screen_stop_requested:
+                return
+            asyncio.run_coroutine_threadsafe(
+                _state.broadcast_screener_result(
+                    {"status": "progress", "stage": progress.stage, "detail": progress.detail}
+                ),
+                loop,
+            )
+
+        async def _run() -> None:
+            try:
+                result_df = await asyncio.to_thread(
+                    run_screen, req.universe, req.weights, on_progress
+                )
+                results = [
+                    {"symbol": sym, **row.to_dict()} for sym, row in result_df.iterrows()
+                ]
+                await _state.broadcast_screener_result({"status": "done", "results": results})
+            except Exception as exc:
+                log.exception("screener_failed", universe=req.universe)
+                await _state.broadcast_screener_result({"status": "error", "detail": str(exc)})
+            finally:
+                _active_screen["running"] = False
+
+        task = asyncio.create_task(_run())
+        _background_tasks.add(task)
+        task.add_done_callback(_background_tasks.discard)
+        return JSONResponse(status_code=202, content={"status": "started"})
+
+    @app.post("/api/screener/stop")
+    async def stop_screen(req: ScreenStopRequest) -> dict[str, str]:
+        global _screen_stop_requested
+        if not _active_screen["running"]:
+            return {"status": "not_running"}
+        _screen_stop_requested = True
+        return {"status": "stopping"}
 
     @app.websocket("/ws")
     async def websocket_endpoint(ws: WebSocket) -> None:

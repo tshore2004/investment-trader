@@ -3,6 +3,8 @@ import { createChartWidget } from './chart.js';
 import { createOrdersWidget } from './orders.js';
 import { createHoldingsWidget } from './holdings.js';
 import { createCompareWidget } from './compare.js';
+import { createMlWidget } from './ml.js';
+import { createScreenerWidget } from './screener.js';
 
 export { PORTFOLIO_SYMBOL };
 
@@ -58,6 +60,8 @@ export const WIDGET_TYPES = {
   orders:   { label: 'Trade History', defaultSize: { w: 4, h: 3 }, needsSymbol: true,  allowsPortfolio: false },
   holdings: { label: 'Holdings',      defaultSize: { w: 6, h: 3 }, needsSymbol: false, allowsPortfolio: false },
   compare:  { label: 'Compare',       defaultSize: { w: 8, h: 4 }, needsSymbol: true,  allowsPortfolio: false },
+  ml:       { label: 'NN Predictor',  defaultSize: { w: 8, h: 5 }, needsSymbol: true,  allowsPortfolio: false },
+  screener: { label: 'Screener',      defaultSize: { w: 8, h: 6 }, needsSymbol: false, allowsPortfolio: false },
 };
 
 // id -> { id, type, config, handle }
@@ -79,6 +83,8 @@ export function createWidget(id, type, config, container, hooks = {}) {
   else if (type === 'orders') handle = createOrdersWidget(container, config);
   else if (type === 'holdings') handle = createHoldingsWidget(container);
   else if (type === 'compare') handle = createCompareWidget(container, config, hooks);
+  else if (type === 'ml') handle = createMlWidget(container, config);
+  else if (type === 'screener') handle = createScreenerWidget(container, config);
   else throw new Error(`unknown widget type: ${type}`);
 
   const instance = { id, type, config, handle };
@@ -128,5 +134,17 @@ export function dispatchHoldings() {
 export function dispatchPosition(sym) {
   for (const inst of instances.values()) {
     if (inst.type === 'metrics' && inst.config.symbol === sym) inst.handle.render();
+  }
+}
+
+export function dispatchMlTraining(msg) {
+  for (const inst of instances.values()) {
+    if (inst.type === 'ml' && inst.handle.handleProgress) inst.handle.handleProgress(msg);
+  }
+}
+
+export function dispatchScreenerResult(msg) {
+  for (const inst of instances.values()) {
+    if (inst.type === 'screener' && inst.handle.handleScreenerResult) inst.handle.handleScreenerResult(msg);
   }
 }
