@@ -220,6 +220,24 @@ Chart widget render total portfolio value as a line instead of OHLC candles.
 `main.py`'s `_portfolio_poll_loop` (10s) does the same for `portfolio`/`portfolio_value`, also
 persisting each portfolio snapshot via `TimeseriesStore.insert_portfolio_snapshot()`.
 
+## Screener
+
+`src/screener/universe.py`'s `sp500.txt`/`broad_market.txt` are **static, point-in-time ticker
+lists** — they drift out of date as real corporate actions happen (mergers, delistings, ticker
+changes). `src/screener/data.py`'s `_split_by_symbol` silently drops any symbol yfinance 404s on
+(logged as a yfinance error, not raised) — a run continues normally over the remaining symbols.
+Seeing `"possibly delisted"` yfinance log lines for a handful of tickers on a given day is expected
+and does not indicate a bug; refreshing the two `.txt` files periodically is a data-maintenance
+task, not a code fix.
+
+`src/screener/scorer.py`'s `score` column is a single **0-100 bullish-strength composite** —
+higher always means stronger momentum/relative-strength/volume with lower volatility (weights in
+`DEFAULT_WEIGHTS`). There is currently no separate bearish/"sell" signal: the bottom of the same
+ranked list is only an implicit proxy for weak candidates (low momentum/high volatility), not a
+dedicated short signal (e.g. breakdown, death cross). Note `rsi14` is ranked so that a *higher* raw
+RSI scores better — this is a deliberate trend-following choice (rising RSI = strengthening
+momentum), not the more common mean-reversion reading of RSI as an overbought/oversold indicator.
+
 ## Adding a strategy
 
 1. Create `src/strategies/my_strategy.py` subclassing `BaseStrategy`.
