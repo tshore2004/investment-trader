@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 from src.data_ingestion.feed import Bar
 from src.ml.service import train_symbol
 from src.ml.trainer import Trainer
+from src.screener.service import ScreenProgress, run_screen
 from src.utils import get_logger
 
 if TYPE_CHECKING:
@@ -76,6 +77,9 @@ class DashboardState:
     async def broadcast_ml_training(self, symbol: str, payload: dict[str, Any]) -> None:
         await self._broadcast({"type": "ml_training", "symbol": symbol, **payload})
 
+    async def broadcast_screener_result(self, payload: dict[str, Any]) -> None:
+        await self._broadcast({"type": "screener_result", **payload})
+
     def snapshot(self) -> dict[str, Any]:
         return {"type": "snapshot",
                 "bars": {s: list(b) for s, b in self.bars.items()},
@@ -111,6 +115,9 @@ _feed: MarketDataFeed | None = None
 _broker: IBBroker | None = None
 _store: TimeseriesStore | None = None
 _active_trainers: dict[str, Trainer] = {}
+_active_screen: dict[str, bool] = {"running": False}
+_screen_stop_requested = False
+_background_tasks: set[asyncio.Task[None]] = set()
 
 
 class TrainRequest(BaseModel):
@@ -122,6 +129,15 @@ class TrainRequest(BaseModel):
 
 class StopRequest(BaseModel):
     symbol: str
+
+
+class ScreenRequest(BaseModel):
+    universe: str
+    weights: dict[str, float] | None = None
+
+
+class ScreenStopRequest(BaseModel):
+    pass
 
 
 def get_state() -> DashboardState:
@@ -240,6 +256,54 @@ def create_app() -> FastAPI:
             return {"status": "not_training", "symbol": sym}
         trainer.stop()
         return {"status": "stopping", "symbol": sym}
+
+    @app.post("/api/screener/run")
+    async def start_screen(req: ScreenRequest) -> JSONResponse:
+        if _active_screen["running"]:
+            return JSONResponse(status_code=409, content={"status": "already_running"})
+
+        _active_screen["running"] = True
+        global _screen_stop_requested
+        _screen_stop_requested = False
+        loop = asyncio.get_running_loop()
+
+        def on_progress(progress: ScreenProgress) -> None:
+            if _screen_stop_requested:
+                return
+            asyncio.run_coroutine_threadsafe(
+                _state.broadcast_screener_result(
+                    {"status": "progress", "stage": progress.stage, "detail": progress.detail}
+                ),
+                loop,
+            )
+
+        async def _run() -> None:
+            try:
+                result_df = await asyncio.to_thread(
+                    run_screen, req.universe, req.weights, on_progress
+                )
+                results = [
+                    {"symbol": sym, **row.to_dict()} for sym, row in result_df.iterrows()
+                ]
+                await _state.broadcast_screener_result({"status": "done", "results": results})
+            except Exception as exc:
+                log.exception("screener_failed", universe=req.universe)
+                await _state.broadcast_screener_result({"status": "error", "detail": str(exc)})
+            finally:
+                _active_screen["running"] = False
+
+        task = asyncio.create_task(_run())
+        _background_tasks.add(task)
+        task.add_done_callback(_background_tasks.discard)
+        return JSONResponse(status_code=202, content={"status": "started"})
+
+    @app.post("/api/screener/stop")
+    async def stop_screen(req: ScreenStopRequest) -> dict[str, str]:
+        global _screen_stop_requested
+        if not _active_screen["running"]:
+            return {"status": "not_running"}
+        _screen_stop_requested = True
+        return {"status": "stopping"}
 
     @app.websocket("/ws")
     async def websocket_endpoint(ws: WebSocket) -> None:
